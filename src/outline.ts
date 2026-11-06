@@ -17,6 +17,7 @@
  * line meeting one lands on the drawn curve to within a fraction of a pixel.
  */
 
+import { assert } from './assert.js';
 import { UNIT } from './constants.js';
 import { SourceError } from './errors.js';
 
@@ -69,6 +70,11 @@ const SHAPE_DEFAULTS = {
   offPage: 18,
   tail: 16,
 };
+assert(Object.values(SHAPE_DEFAULTS).every((amount) => amount > 0), 'every shape\'s default amount takes some room');
+assert(
+  Object.values(SHAPE_SETTINGS).every((takes) => Object.values(takes).every((kind) => kind === 'distance' || kind === 'flag' || kind.length > 1)),
+  'every shape setting is a distance, a word on its own, or a choice of ways',
+);
 
 /**
  * Read a shape's bracket, refusing a setting the shape doesn't take and a
@@ -101,13 +107,21 @@ export function readShapeLook(outline: string, written: Record<string, string>, 
     }
     (look as Record<string, unknown>)[key] = value;
   }
+  assert(
+    Object.keys(look).length === Object.keys(written).length && Object.keys(look).every((key) => takes[key] !== undefined),
+    'a shape\'s look holds every setting written, each one the shape takes',
+  );
   return look;
 }
 
 function readDistance(written: string, subject: string, line: number): number {
-  if (/^\d*\.?\d+$/.test(written)) return Number(written) * UNIT;
-  const pixels = /^(\d*\.?\d+)px$/.exec(written);
-  if (pixels) return Number(pixels[1]);
+  const distance = /^\d*\.?\d+$/.test(written) ? Number(written) * UNIT : undefined;
+  const pixels = distance === undefined ? /^(\d*\.?\d+)px$/.exec(written) : null;
+  const read = distance ?? (pixels ? Number(pixels[1]) : undefined);
+  if (read !== undefined) {
+    assert(!(read < 0), 'a distance read from digits is never negative');
+    return read;
+  }
   throw new SourceError(`${subject} "${written}" is not a distance — write a number in the file's unit, or pixels such as 12px`, line);
 }
 
@@ -188,6 +202,17 @@ function r2(value: number): number {
  * included so a caller can always ask, but the renderer draws those itself.
  */
 export function shapeOf(outline: string, look: ShapeLook, w: number, h: number): Shape {
+  const shape = drawnShape(outline, look, w, h);
+  assert(shape.polygon.length >= 3, 'an outline encloses something: three corners at least');
+  assert(
+    [shape.path, ...shape.detail].every((path) => path.startsWith('M')) && shape.path.endsWith('Z'),
+    'an outline\'s path starts with a move and closes, and each detail starts with a move',
+  );
+  return shape;
+}
+
+/** `shapeOf`'s outlines, one case each. */
+function drawnShape(outline: string, look: ShapeLook, w: number, h: number): Shape {
   switch (outline) {
     case 'circle': {
       const points = arcPoints(w / 2, h / 2, w / 2, h / 2, Math.PI, 3 * Math.PI).slice(0, -1);
@@ -393,6 +418,7 @@ export function insideOutline(points: Point[], p: Point): boolean {
 
 /** Whether a point is more than `distance` from every edge of a polygon. */
 export function clearOf(points: Point[], p: Point, distance: number): boolean {
+  assert(distance >= 0, 'a point is kept clear of an outline by a distance, never by less than none');
   for (let i = 0; i < points.length; i++) {
     const a = points[i]!;
     const b = points[(i + 1) % points.length]!;
@@ -437,6 +463,7 @@ export function sizeFor(outline: string, look: ShapeLook, tw: number, th: number
     width *= 1.02;
     height *= 1.02;
   }
+  assert(!(width < guess.width) && !(height < guess.height), 'an outline only grows to hold its text');
   return { width, height };
 }
 
@@ -505,6 +532,7 @@ export function rayExit(points: Point[], from: Point, way: Point): number | unde
     const t = rayHitsSegment(from, way, a, b);
     if (t !== undefined && t > 1e-9 && (best === undefined || t > best)) best = t;
   }
+  assert(best === undefined || best > 0, 'a ray leaves an outline ahead of where it starts');
   return best;
 }
 
@@ -569,6 +597,7 @@ export function sideStretch(points: Point[], middle: Point, box: { x: number; y:
     clockwise = false;
     width = 2 * Math.PI - width;
   }
+  assert(!(width < 0) && !(width > 2 * Math.PI), 'a side spans less than a whole turn round the middle');
   const out: Point[] = [];
   const steps = 96;
   for (let i = 0; i <= steps; i++) {
@@ -577,6 +606,7 @@ export function sideStretch(points: Point[], middle: Point, box: { x: number; y:
     const last = out[out.length - 1];
     if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1e-6) out.push(p);
   }
+  assert(out.length > 0, 'a side\'s stretch of outline has a point at least');
   return out;
 }
 
