@@ -1,3 +1,4 @@
+import { assert } from './assert.js';
 import type { Attrs, EdgeTextPlace, Kind, Limit, Mark, NodeCorners, Placement, PlacementTarget, ViaEntry, Way } from './ast.js';
 
 /** A rectangle on the page; a side or a point has no size on one axis or both. */
@@ -338,8 +339,13 @@ export function joinedToText(node: LayoutNode): boolean {
   const seen = new Set<LayoutNode>();
   for (let at: LayoutNode | undefined = node; at && !seen.has(at); ) {
     seen.add(at);
+    assert(at.parent === node.parent, 'a join runs through siblings only');
     const target: LayoutNode | 'text' | undefined = at.joinWith;
-    if (target === 'text') return true;
+    if (target === 'text') {
+      assert(node.parent !== undefined, 'only a node in a box joins its text');
+      return true;
+    }
+    assert(target !== at, 'a node joins another, never itself');
     at = target;
   }
   return false;
@@ -347,6 +353,9 @@ export function joinedToText(node: LayoutNode): boolean {
 
 /** Whether a node is inside another, at any depth. */
 export function isWithin(node: LayoutNode, ancestor: LayoutNode): boolean {
-  for (let at = node.parent; at; at = at.parent) if (at === ancestor) return true;
+  for (let at = node.parent; at; at = at.parent) {
+    assert(at !== node, 'a node is never inside itself');
+    if (at === ancestor) return true;
+  }
   return false;
 }

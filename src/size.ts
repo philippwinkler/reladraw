@@ -9,6 +9,7 @@
  */
 import type { Token } from './lexer.js';
 import { isAttrKey } from './lexer.js';
+import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 
 export type Dimension = 'width' | 'height';
@@ -70,6 +71,7 @@ export function readSize(
     }
     token.text.split(/(\+)/).filter((part) => part.length > 0).forEach((part) => spaced.push({ text: part, quoted: false }));
   }
+  assert(SIZE_KEYS[key] !== undefined, 'a size is read only for a size key');
   const reading: Reading = { tokens: spaced, at, key, subject, line, stops };
   if (!startsOperand(reading)) {
     throw new SourceError(
@@ -89,6 +91,7 @@ export function readSize(
       : token.text.split(/(\+)/).filter((part) => part.length > 0).length;
     next = index + 1;
   }
+  assert(consumed >= reading.at - at && next > at, 'counting back reaches every word the size read, and it read one');
   return { size, next };
 }
 
@@ -152,6 +155,7 @@ function startsOperand(reading: Reading): boolean {
 }
 
 function sum(reading: Reading): SizeExpr {
+  const start = reading.at;
   const terms = [scaled(reading)];
   while (isWord(reading, '+')) {
     reading.at += 1;
@@ -161,7 +165,8 @@ function sum(reading: Reading): SizeExpr {
     terms.push(scaled(reading));
   }
   refuseStar(reading);
-  return terms.length === 1 ? terms[0]! : { kind: 'sum', terms };
+  assert(reading.at >= start + 2 * terms.length - 1, 'every term takes a word at least, and a + between each two');
+  return terms.length === 1 ? assertFound(terms[0], 'a sum has its first term') : { kind: 'sum', terms };
 }
 
 function refuseStar(reading: Reading): void {
@@ -182,7 +187,7 @@ function refuseBracket(reading: Reading): void {
     if (isAttrKey(peek(reading, ahead)!)) settings = true;
   }
   if (!settings) return;
-  const dimension = SIZE_KEYS[reading.key]!;
+  const dimension = assertFound(SIZE_KEYS[reading.key], 'a size is read only for a size key');
   throw new SourceError(
     `${reading.subject}: ${reading.key}: takes no bracket — a limit is its own key, min-${dimension}: or max-${dimension}:, ` +
       'since a bracket reads as belonging to whatever it sits beside',
@@ -201,7 +206,7 @@ function scaled(reading: Reading): SizeExpr {
   const value = number[2] === undefined ? Number(number[1]) : Number(number[1]) / Number(number[2]);
   if (number[3]) return { kind: 'number', value, unit: 'px' };
   if (isWord(reading, 'lines') || isWord(reading, 'chars')) {
-    const unit = peek(reading)!.text as 'lines' | 'chars';
+    const unit = assertFound(peek(reading), 'the unit word was just seen').text as 'lines' | 'chars';
     reading.at += 1;
     return { kind: 'number', value, unit };
   }
@@ -274,7 +279,7 @@ function atom(reading: Reading): SizeExpr {
     };
   }
   if (isWord(reading, 'width') || isWord(reading, 'height')) {
-    const dimension = peek(reading)!.text as Dimension;
+    const dimension = assertFound(peek(reading), 'the dimension word was just seen').text as Dimension;
     reading.at += 1;
     return { kind: 'measure', name, dimension };
   }

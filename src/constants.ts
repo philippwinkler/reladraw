@@ -1,4 +1,5 @@
 /** Spacing and text sizes shared by the resolver and the renderer, so the two cannot drift. */
+import { assert, assertFound } from './assert.js';
 import type { Attrs, Position } from './ast.js';
 import { POSITIONS, isPosition } from './ast.js';
 import { SourceError } from './errors.js';
@@ -41,7 +42,11 @@ export const GAPS: Record<string, number> = {
  * the space it leaves should read as "these are not the same box" and never as
  * a relationship someone stated. Say `gap:` if you want breathing room.
  */
-export const SEPARATION_GAP = GAPS['tight']!;
+export const SEPARATION_GAP = assertFound(GAPS['tight'], 'the separation gap is one of the named gaps');
+assert(
+  GAPS['none'] === 0 && Object.values(GAPS).every((gap) => Number.isInteger(gap / UNIT) && gap >= 0),
+  'the named gaps are whole units, from none at zero',
+);
 
 /**
  * Between two edges meeting the same side of the same box. An author names a
@@ -83,6 +88,10 @@ export const BORDER_THICKNESS: Record<string, number> = {
   normal: BORDER_WIDTH,
   thick: BORDER_WIDTH * 2,
 };
+assert(
+  [THICKNESS, BORDER_THICKNESS].every((table) => table['normal'] !== undefined && Object.values(table).every((width) => width > 0)),
+  'every thickness word draws something, and normal is one of them',
+);
 
 /**
  * How much of a line of this thickness its arrowhead covers. The marker scales
@@ -91,6 +100,7 @@ export const BORDER_THICKNESS: Record<string, number> = {
  * thickness is a size, like a text's, and a size is allowed to take room.
  */
 export function arrowLength(thickness: number): number {
+  assert(thickness > 0, 'a line asked about has a thickness');
   return ARROW_MARKER_WIDTH * thickness;
 }
 
@@ -137,6 +147,10 @@ export const TEXT_SIZES: Record<string, number> = {
   normal: 1,
   large: 25 / 21,
 };
+assert(
+  TEXT_SIZES['normal'] === 1 && Object.values(TEXT_SIZES).every((scale) => scale > 0),
+  'every text size is a positive multiple of normal, and normal is the document size',
+);
 
 /**
  * What each kind of text is set at when the file says nothing. A node with no
@@ -250,11 +264,12 @@ export function textStyleFor(
   if (align !== undefined && TEXT_ALIGNMENTS[align] === undefined) {
     throw new SourceError(`a text's align takes left, center or right, not "${align}"`, line);
   }
+  assert(isPosition(at), 'a text sits at a point of the box, read or by default');
   const parts = at.split('-');
   return {
     at,
     end: parts.includes('top') ? 'top' : parts.includes('bottom') ? 'bottom' : 'center',
     side: parts.includes('left') ? 'left' : parts.includes('right') ? 'right' : 'center',
-    align: align === undefined ? fallbackAlign : TEXT_ALIGNMENTS[align]!,
+    align: align === undefined ? fallbackAlign : assertFound(TEXT_ALIGNMENTS[align], 'an align word checked above has its SVG spelling'),
   };
 }

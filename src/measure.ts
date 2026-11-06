@@ -9,6 +9,8 @@
  * measures exactly.
  */
 
+import { assert } from './assert.js';
+
 export interface TextBox {
   width: number;
   height: number;
@@ -68,6 +70,7 @@ export function monospaceMeasurer(
   fontFamily: string = DEFAULT_STACK,
   advanceRatio: number = DEFAULT_ADVANCE_RATIO,
 ): Measurer {
+  assert(advanceRatio > 0 && fontFamily.length > 0, 'a measurer has a face, and every glyph in it advances');
   return {
     fontFamily,
 
