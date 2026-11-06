@@ -26,6 +26,7 @@ export function drawPage(
   const drawn = `drawn from ${file}, ${stamp(at)}`;
   const made = drawSource(source, options, (picture) => renderTagged(picture, options));
   const { svg, tagged } = made.drawn;
+  assert(options.checks !== false || made.findings.length === 0, 'with the checks off, nothing is found');
   const layout = made.picture.layout;
   const title = layout.diagram['title'] ?? name;
   return {

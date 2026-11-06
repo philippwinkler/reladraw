@@ -13,6 +13,8 @@
  * inside it; `label` shows the zoom; `buttons` holds the elements for out, in,
  * fit and 100%, any of which may be missing.
  */
+import { assert } from './assert.js';
+
 export const PAN_ZOOM = String.raw`
 function panZoom(view, stage, label, buttons) {
   var MIN = 0.05;
@@ -183,3 +185,6 @@ function panZoom(view, stage, label, buttons) {
   return { show: show, open: open, fit: fit, pan: pan };
 }
 `;
+assert(PAN_ZOOM.split('function panZoom(').length === 2, 'the zoom\'s code declares panZoom, once');
+assert(!/<\/script/i.test(PAN_ZOOM), 'the zoom\'s code can sit inside a <script> without ending it');
+assert(PAN_ZOOM.split('{').length === PAN_ZOOM.split('}').length, 'the zoom\'s code closes every brace it opens');
