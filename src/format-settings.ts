@@ -1,3 +1,4 @@
+import { assert } from './assert.js';
 import { ALL_ATTR_KEYS } from './ast.js';
 import { nearMatch } from './checks.js';
 import { SourceError } from './errors.js';
@@ -42,6 +43,7 @@ const SETTING_COUNT = /^[1-9]\d*$/;
  * refused with the list.
  */
 function wordSetting<K extends keyof FormatSettings>(name: K, about: string, values: [string, string][]): Setting {
+  assert(values.length > 1, 'a setting of words offers a choice of two at least');
   return {
     name,
     about,
@@ -196,6 +198,8 @@ export const SETTINGS: Setting[] = [
 ];
 
 const SETTING_BY_NAME = new Map(SETTINGS.map((setting) => [setting.name, setting]));
+assert(SETTING_BY_NAME.size === SETTINGS.length, 'every setting has a name of its own');
+assert(SETTINGS.every((setting) => setting.written === setting.values[0]?.[0]), 'each setting\'s default is the first value listed, which is the one the settings file marks');
 
 export const DEFAULT_FORMAT: FormatSettings = Object.fromEntries(
   SETTINGS.map((setting) => [setting.name, setting.read(setting.written)]),
@@ -245,6 +249,7 @@ export function readFormatSettings(text: string): FormatSettings {
       seen.get('clause-gap') ?? seen.get('columns') ?? 1,
     );
   }
+  assert(Object.keys(settings).length === SETTINGS.length, 'a settings file sets only settings there are, and leaves the rest at their defaults');
   return settings;
 }
 
@@ -273,7 +278,9 @@ export function settingsFileText(): string {
     '// Every setting is written out at its default; change the ones you want, or',
     '// delete a line to use the default.',
   ].join('\n');
-  return `${header}\n\n${blocks.join('\n\n')}\n`;
+  const text = `${header}\n\n${blocks.join('\n\n')}\n`;
+  assert(JSON.stringify(readFormatSettings(text)) === JSON.stringify(DEFAULT_FORMAT), 'the settings file written out reads back as the defaults');
+  return text;
 }
 
 function orList(words: string[]): string {
