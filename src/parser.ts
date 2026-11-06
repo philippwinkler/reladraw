@@ -91,12 +91,12 @@ export interface Gathered {
 }
 
 /**
- * Set while `clausesOf` runs: the first token of every clause the parser
+ * Where `clausesOf` collects the first token of every clause the parser
  * reads, so the formatter can tell where one clause ends and the next begins
  * without a second grammar of its own. Clauses inside brackets are recorded
- * too, and the formatter passes over them.
+ * too, and the formatter passes over them. Absent for an ordinary parse.
  */
-let clauseStarts: Set<Token> | null = null;
+type ClauseStarts = Set<Token> | undefined;
 
 /**
  * Parse a source for the formatter: each statement as gathered, and the first
@@ -106,12 +106,7 @@ let clauseStarts: Set<Token> | null = null;
 export function clausesOf(source: string): { statements: Gathered[]; starts: Set<Token> } {
   const statements: Gathered[] = [];
   const starts = new Set<Token>();
-  clauseStarts = starts;
-  try {
-    parse(source, (statement) => statements.push(statement));
-  } finally {
-    clauseStarts = null;
-  }
+  parse(source, (statement) => statements.push(statement), starts);
   return { statements, starts };
 }
 
@@ -130,7 +125,7 @@ export function clausesOf(source: string): { statements: Gathered[]; starts: Set
  * are its own, blank or not, and a line opening with one continues the
  * statement above without being indented.
  */
-export function parse(source: string, seen?: (statement: Gathered) => void): Document {
+export function parse(source: string, seen?: (statement: Gathered) => void, starts?: Set<Token>): Document {
   const statements: Stmt[] = [];
   /** The statement being gathered, the line it starts on, and its lines' tokens. */
   let open: { tokens: Token[]; line: number; lines: Gathered['lines'] } | null = null;
@@ -141,7 +136,7 @@ export function parse(source: string, seen?: (statement: Gathered) => void): Doc
   const close = () => {
     if (open) {
       seen?.({ line: open.line, lines: open.lines });
-      statements.push(parseStatement(open.tokens, open.line));
+      statements.push(parseStatement(open.tokens, open.line, starts));
     }
     open = null;
     depth = 0;
@@ -246,7 +241,9 @@ export function blame(source: string, error: SourceError, run: (source: string) 
     try {
       run(cut);
     } catch (partial) {
-      if (partial instanceof SourceError && partial.message === error.message) {
+      // A cut that fails some other way than the source can is a bug, not a clue.
+      if (!(partial instanceof SourceError)) throw partial;
+      if (partial.message === error.message) {
         return last === start ? error : new SourceError(error.message, last + 1);
       }
     }
@@ -254,7 +251,7 @@ export function blame(source: string, error: SourceError, run: (source: string) 
   return new SourceError(error.message, end + 1);
 }
 
-function parseStatement(tokens: Token[], line: number): Stmt {
+function parseStatement(tokens: Token[], line: number, starts: ClauseStarts): Stmt {
   const keyword = tokens[0];
   if (!keyword || keyword.quoted) {
     throw new SourceError('a statement must begin with a keyword', line);
@@ -275,23 +272,23 @@ function parseStatement(tokens: Token[], line: number): Stmt {
     case 'icon':
       return parseIcon(tokens, line);
     case 'node':
-      return parseNode(tokens, line);
+      return parseNode(tokens, line, starts);
     case 'edge':
-      return parseEdge(tokens, line);
+      return parseEdge(tokens, line, starts);
     case 'style':
-      return parseStyle(tokens, line);
+      return parseStyle(tokens, line, starts);
     case 'diagram':
-      return parseDiagram(tokens, line);
+      return parseDiagram(tokens, line, starts);
     case 'default':
-      return parseDefault(tokens, line);
+      return parseDefault(tokens, line, starts);
     case 'point':
-      return parsePoint(tokens, line);
+      return parsePoint(tokens, line, starts);
     case 'region':
-      return parseRegion(tokens, line);
+      return parseRegion(tokens, line, starts);
     case 'bundle':
-      return parseBundle(tokens, line);
+      return parseBundle(tokens, line, starts);
     case 'guide':
-      return parseGuide(tokens, line);
+      return parseGuide(tokens, line, starts);
     default:
       throw new SourceError(substitution(keyword.text, tokens), line);
   }
@@ -378,6 +375,7 @@ function parseTail(
   start: number,
   line: number,
   subject: string,
+  starts: ClauseStarts,
   other?: (tokens: Token[], at: number) => number | undefined,
 ): { attrs: Attrs; placements: Placement[] } {
   const attrs: Attrs = {};
@@ -386,9 +384,9 @@ function parseTail(
 
   while (i < tokens.length) {
     const token = tokens[i]!;
-    clauseStarts?.add(token);
+    starts?.add(token);
     if (isAttrKey(token)) {
-      i = readAttr(tokens, i, attrs, line, subject);
+      i = readAttr(tokens, i, attrs, line, subject, starts);
       continue;
     }
     const taken = other?.(tokens, i);
@@ -396,7 +394,7 @@ function parseTail(
       i = taken;
       continue;
     }
-    const read = readPlacement(tokens, i, line, subject);
+    const read = readPlacement(tokens, i, line, subject, starts);
     placements.push(read.placement);
     i = read.next;
   }
@@ -477,9 +475,10 @@ function readAttr(
   attrs: Attrs,
   line: number,
   subject: string,
+  starts: ClauseStarts,
 ): number {
   const keyToken = tokens[at]!;
-  clauseStarts?.add(keyToken);
+  starts?.add(keyToken);
   const key = keyToken.text.slice(0, -1);
   if (key === 'gap') {
     throw new SourceError(
@@ -515,7 +514,7 @@ function readAttr(
       throw new SourceError(`${subject}: heading: names one of its own children, such as heading: ${subject.replace(/^node "|"$/g, '')}.head`, line);
     }
     setOnce(attrs, 'heading', value.text, subject, line);
-    const taken = takeTitlePlace(tokens, at + 2, subject, line);
+    const taken = takeTitlePlace(tokens, at + 2, subject, line, starts);
     const read = readBracket(taken.tokens, at + 2, ['align'], {
       subject,
       what: '`heading:`',
@@ -1029,7 +1028,7 @@ function readAttr(
 }
 
 /** Attributes only, for the statements that take no placements. */
-function attrsOnly(tokens: Token[], start: number, line: number, subject: string): Attrs {
+function attrsOnly(tokens: Token[], start: number, line: number, subject: string, starts: ClauseStarts): Attrs {
   const attrs: Attrs = {};
   let i = start;
   while (i < tokens.length) {
@@ -1040,7 +1039,7 @@ function attrsOnly(tokens: Token[], start: number, line: number, subject: string
         line,
       );
     }
-    i = readAttr(tokens, i, attrs, line, subject);
+    i = readAttr(tokens, i, attrs, line, subject, starts);
   }
   return attrs;
 }
@@ -1068,6 +1067,7 @@ function readEdgeTextBracket(
   subject: string,
   text: string,
   line: number,
+  starts: ClauseStarts,
 ): { attrs: Attrs; place: EdgeTextPlace; next: number } {
   const attrs: Attrs = {};
   const place: EdgeTextPlace = {};
@@ -1159,7 +1159,7 @@ function readEdgeTextBracket(
       while (end < tokens.length && plain(tokens[end]) !== ')' && !(tokens[end]!.text.endsWith(',') && !tokens[end]!.quoted)) end += 1;
       const comma = end < tokens.length && plain(tokens[end]) !== ')';
       const item = tokens.slice(i, end + (comma ? 1 : 0)).map((t, k, all) => (comma && k === all.length - 1 ? { ...t, text: t.text.slice(0, -1) } : t));
-      const read = readPlacement(item, 0, line, subject);
+      const read = readPlacement(item, 0, line, subject, starts);
       const placement = read.placement as AlignPlacement;
       const written = item.slice(0, read.next).map((t) => t.text).join(' ');
       if (read.next < item.length) {
@@ -1318,6 +1318,7 @@ function takeTitlePlace(
   open: number,
   subject: string,
   line: number,
+  starts: ClauseStarts,
 ): { tokens: Token[]; place?: string; placements: Placement[] } {
   if (!follows(tokens, open, '(')) return { tokens, placements: [] };
   const first = tokens[open + 1];
@@ -1335,7 +1336,7 @@ function takeTitlePlace(
       place: `${word} ${side}`,
     };
   }
-  return takeTitlePlacements(tokens, open, subject, line);
+  return takeTitlePlacements(tokens, open, subject, line, starts);
 }
 
 /**
@@ -1344,7 +1345,7 @@ function takeTitlePlace(
  * comma-separated item that opens a placement is read as one and taken out;
  * the rest stay for the bracket's keys.
  */
-function takeTitlePlacements(tokens: Token[], open: number, subject: string, line: number): { tokens: Token[]; placements: Placement[] } {
+function takeTitlePlacements(tokens: Token[], open: number, subject: string, line: number, starts: ClauseStarts): { tokens: Token[]; placements: Placement[] } {
   let close = open + 1;
   let depth = 0;
   for (; close < tokens.length; close += 1) {
@@ -1375,7 +1376,7 @@ function takeTitlePlacements(tokens: Token[], open: number, subject: string, lin
     const head = each[0];
     if (head && !isAttrKey(head) && startsPlacement(head, each[1])) {
       for (let at = 0; at < each.length; ) {
-        const read = readPlacement(each, at, line, subject);
+        const read = readPlacement(each, at, line, subject, starts);
         placements.push(read.placement);
         at = read.next;
       }
@@ -1411,7 +1412,7 @@ function takeTitlePlacements(tokens: Token[], open: number, subject: string, lin
  * the price, and it is honest: a file that states no text is saying the name
  * is the text.
  */
-function parseNode(head: Token[], line: number): NodeStmt {
+function parseNode(head: Token[], line: number, starts: ClauseStarts): NodeStmt {
   const name = requireName(head[1], 'node', line);
   const written = head[2];
   const textToken = written?.quoted ? written : undefined;
@@ -1427,7 +1428,7 @@ function parseNode(head: Token[], line: number): NodeStmt {
   const text = textToken ? textToken.text : name.slice(name.lastIndexOf('.') + 1);
   const subject = `node "${name}"`;
   const open = textToken ? 3 : 2;
-  const taken = takeTitlePlace(head, open, subject, line);
+  const taken = takeTitlePlace(head, open, subject, line, starts);
   head = taken.tokens;
   const place = taken.place;
   const titlePlacements = taken.placements;
@@ -1441,10 +1442,10 @@ function parseNode(head: Token[], line: number): NodeStmt {
   });
   refuseNodeReads(bracket.values['reads'], subject, line);
   const limits: Limit[] = [];
-  const tail = parseTail(head, bracket.next, line, subject, (tokens, index) => {
+  const tail = parseTail(head, bracket.next, line, subject, starts, (tokens, index) => {
     const word = tokens[index]!;
     if (word.quoted || word.text !== 'stays') return undefined;
-    const read = readLimit(tokens, index, line, subject);
+    const read = readLimit(tokens, index, line, subject, starts);
     limits.push(read.limit);
     return read.next;
   });
@@ -1468,7 +1469,7 @@ function parseNode(head: Token[], line: number): NodeStmt {
  * after `stays` are read as a placement would be, then held to one straight
  * way and one target, since a limit says which side of one thing to keep to.
  */
-function readLimit(tokens: Token[], at: number, line: number, subject: string): { limit: Limit; next: number } {
+function readLimit(tokens: Token[], at: number, line: number, subject: string, starts: ClauseStarts): { limit: Limit; next: number } {
   const way = tokens[at + 1];
   const straight = ['above', 'below', 'left', 'right'];
   if (!way || way.quoted || !straight.includes(way.text)) {
@@ -1480,7 +1481,7 @@ function readLimit(tokens: Token[], at: number, line: number, subject: string): 
       line,
     );
   }
-  const read = readPlacement(tokens, at + 1, line, subject, true);
+  const read = readPlacement(tokens, at + 1, line, subject, starts, true);
   const placement = read.placement;
   if (placement.kind !== 'offset' || placement.own !== undefined || placement.gaps !== undefined) {
     throw new SourceError(`${subject}: "stays" names a way and one thing, such as \`stays above laptop.photos\``, line);
@@ -1532,6 +1533,7 @@ function readMarkText(
   kind: 'point' | 'region',
   subject: string,
   line: number,
+  starts: ClauseStarts,
 ): { text?: MarkText; tokens: Token[]; next: number } {
   const written = head[2];
   if (!written?.quoted) return { tokens: head, next: 2 };
@@ -1562,7 +1564,7 @@ function readMarkText(
       }
     }
   } else {
-    const taken = takeTitlePlace(tokens, 3, subject, line);
+    const taken = takeTitlePlace(tokens, 3, subject, line, starts);
     if (taken.placements.length > 0) {
       throw new SourceError(`${subject}: a region's text is placed against a side of it, such as (outside top) — a region holds nothing to place it against`, line);
     }
@@ -1688,12 +1690,12 @@ function readMark(written: string, end: 'from' | 'to', arrow: string, line: numb
  * end many lines have no direction at all, and the written order is the one
  * every edge has — so `from:` names the first name's side on every edge.
  */
-function parseEdge(head: Token[], line: number): EdgeStmt {
+function parseEdge(head: Token[], line: number, starts: ClauseStarts): EdgeStmt {
   // `edge each child of a -> b`: one line from each direct child of a (design.org 6.6).
   const each = eachChildAt(head);
   if (each.length > 0) {
     const kept = head.filter((_, index) => !each.some((at) => index >= at && index < at + 3));
-    const stmt = parseEdge(kept, line);
+    const stmt = parseEdge(kept, line, starts);
     // Before the arrow, the first end; after it, the second.
     const sides = each.map((at) => (head.slice(1, at).some(looksLikeArrow) ? 'to' : 'from'));
     const subject = `edge ${sides.includes('from') ? 'each child of ' : ''}${stmt.from} ${stmt.arrow} ${sides.includes('to') ? 'each child of ' : ''}${stmt.to}`;
@@ -1715,7 +1717,7 @@ function parseEdge(head: Token[], line: number): EdgeStmt {
   // so the stretch they share leaving `a` is said rather than happened on (6.6).
   const lists = endLists(head, line);
   if (lists !== undefined) {
-    const stmt = parseEdge(lists.head, line);
+    const stmt = parseEdge(lists.head, line, starts);
     const written = (names: string[]) => names.join(', ');
     const subject = `edge ${written(lists.from)} ${stmt.arrow} ${written(lists.to)}`;
     if (lists.from.length > 1 && lists.to.length > 1) {
@@ -1739,13 +1741,13 @@ function parseEdge(head: Token[], line: number): EdgeStmt {
   // from the ends by position, as in `node api "API"` (design.org 6.1).
   if (head[2] && head[3] && !head[2].quoted && !looksLikeArrow(head[2]) && looksLikeArrow(head[3])) {
     const name = requireName(head[1], 'edge', line);
-    const stmt = parseEdge([head[0]!, ...head.slice(2)], line);
+    const stmt = parseEdge([head[0]!, ...head.slice(2)], line, starts);
     if (stmt.several !== undefined) {
       throw new SourceError(`edge ${name}: a name belongs to one line, and a list of ends draws one line to each — leave the name off`, line);
     }
     return { ...stmt, name };
   }
-  const stmt = parseEdgeEnds(head, line);
+  const stmt = parseEdgeEnds(head, line, starts);
   // `via:` and the targets of `to: left, even with cat1` were stored as JSON
   // among the attributes; they belong to the line, so they come out here.
   const { via, 'from.even': fromEven, 'to.even': toEven, ...attrs } = stmt.attrs;
@@ -1824,7 +1826,7 @@ export function looksLikeArrow(token: Token): boolean {
   return /^[<|*o]*\|?-{1,}[>|*o]*$/.test(token.text) || /^-+$/.test(token.text);
 }
 
-function parseEdgeEnds(head: Token[], line: number): EdgeStmt {
+function parseEdgeEnds(head: Token[], line: number, starts: ClauseStarts): EdgeStmt {
   const left = requireName(head[1], 'edge', line);
   const arrow = readArrow(head, line);
   const rightToken = head[arrow.next];
@@ -1859,7 +1861,7 @@ function parseEdgeEnds(head: Token[], line: number): EdgeStmt {
   while (head[at]?.quoted) {
     const text = head[at]!.text;
     const bracketed = follows(head, at + 1, '(');
-    const read = readEdgeTextBracket(head, at + 1, subject, text, line);
+    const read = readEdgeTextBracket(head, at + 1, subject, text, line, starts);
     texts.push({ text, textAttrs: read.attrs, place: read.place });
     at = read.next;
     if (bracketed && follows(head, at, '(')) {
@@ -1871,7 +1873,7 @@ function parseEdgeEnds(head: Token[], line: number): EdgeStmt {
   // once said what a line keeps clear of, `between c and d` and `below b`, are
   // gone: a line says the places it passes instead (design.org 6.4).
   let straight: Way | undefined;
-  const tail = parseTail(head, at, line, subject, (tokens, index) => {
+  const tail = parseTail(head, at, line, subject, starts, (tokens, index) => {
     const word = tokens[index]!;
     if (!word.quoted && word.text === 'straight') {
       // `straight down`: leave that way and stop at what the line meets (6.2).
@@ -1943,7 +1945,7 @@ function parseEdgeEnds(head: Token[], line: number): EdgeStmt {
  * node frame ""`: the statement as it would be, reference only (design.org
  * 8.1). The word applies to its own statement and nothing inside it.
  */
-function parseGuide(head: Token[], line: number): Stmt {
+function parseGuide(head: Token[], line: number, starts: ClauseStarts): Stmt {
   const kind = head[1];
   const kinds = ['node', 'edge', 'point', 'region'];
   if (!kind || kind.quoted || !kinds.includes(kind.text)) {
@@ -1953,7 +1955,7 @@ function parseGuide(head: Token[], line: number): Stmt {
       line,
     );
   }
-  const stmt = parseStatement(head.slice(1), line);
+  const stmt = parseStatement(head.slice(1), line, starts);
   if (stmt.kind !== 'node' && stmt.kind !== 'edge' && stmt.kind !== 'point' && stmt.kind !== 'region') {
     throw new SourceError('guide goes before a node, an edge, a point or a region', line);
   }
@@ -1966,7 +1968,7 @@ function parseGuide(head: Token[], line: number): Stmt {
  * (design.org 6.6). Or `bundle calls  a -> b  layout: fan`: the direct way
  * between two boxes, which copies of one line share.
  */
-function parseBundle(head: Token[], line: number): BundleStmt {
+function parseBundle(head: Token[], line: number, starts: ClauseStarts): BundleStmt {
   const name = requireName(head[1], 'bundle', line);
   const subject = `bundle "${name}"`;
   const attrs: Attrs = {};
@@ -2021,7 +2023,7 @@ function parseBundle(head: Token[], line: number): BundleStmt {
       i = next;
       continue;
     }
-    i = readAttr(head, i, attrs, line, subject);
+    i = readAttr(head, i, attrs, line, subject, starts);
   }
   refuseKeys(attrs, BUNDLE_KEYS, subject, 'a bundle', line);
   if (via === undefined && between === undefined) {
@@ -2083,29 +2085,29 @@ function parseBundle(head: Token[], line: number): BundleStmt {
 }
 
 /** `point funnel  between c2 and api at 2/3` */
-function parsePoint(head: Token[], line: number): PointStmt {
+function parsePoint(head: Token[], line: number, starts: ClauseStarts): PointStmt {
   const name = requireName(head[1], 'point', line);
   const subject = `point "${name}"`;
-  const marked = readMarkText(head, 'point', subject, line);
+  const marked = readMarkText(head, 'point', subject, line, starts);
   head = marked.tokens;
   const start = marked.next;
   if (!head[start] || isAttrKey(head[start])) {
     throw new SourceError(`${subject} says where it is, such as \`point ${name}  between a and b\``, line);
   }
-  clauseStarts?.add(head[start]);
+  starts?.add(head[start]);
   const read = readOneTarget(head, start, subject, line, true);
   if (read.listed) throw new SourceError(`${subject} is one point, so it takes no list`, line);
   refuseSpan(read.target, subject, line);
-  const attrs = attrsOnly(head, read.next, line, subject);
+  const attrs = attrsOnly(head, read.next, line, subject, starts);
   refuseKeys(attrs, POINT_KEYS, subject, 'a point', line);
   return { kind: 'point', name, point: read.target, ...(marked.text ? { text: marked.text } : {}), attrs, line };
 }
 
 /** `region r  c bottom-left to d top-right`, or `region r  between a and b (span: both)` */
-function parseRegion(head: Token[], line: number): RegionStmt {
+function parseRegion(head: Token[], line: number, starts: ClauseStarts): RegionStmt {
   const name = requireName(head[1], 'region', line);
   const subject = `region "${name}"`;
-  const marked = readMarkText(head, 'region', subject, line);
+  const marked = readMarkText(head, 'region', subject, line, starts);
   head = marked.tokens;
   const start = marked.next;
   if (!head[start] || isAttrKey(head[start])) {
@@ -2114,7 +2116,7 @@ function parseRegion(head: Token[], line: number): RegionStmt {
       line,
     );
   }
-  clauseStarts?.add(head[start]);
+  starts?.add(head[start]);
   const first = readOneTarget(head, start, subject, line, true);
   if (first.listed) throw new SourceError(`${subject}: a region runs from one point to another, written with "to", not a list`, line);
   let corners: RegionStmt['corners'];
@@ -2135,7 +2137,7 @@ function parseRegion(head: Token[], line: number): RegionStmt {
     }
     corners = [first.target];
   }
-  const attrs = attrsOnly(head, next, line, subject);
+  const attrs = attrsOnly(head, next, line, subject, starts);
   refuseKeys(attrs, REGION_KEYS, subject, 'a region', line);
   if (attrs['opacity'] !== undefined) checkOpacity(attrs['opacity'], subject, line);
   return { kind: 'region', name, corners, ...(marked.text ? { text: marked.text } : {}), attrs, line };
@@ -2151,9 +2153,9 @@ function refuseKeys(attrs: Attrs, keys: readonly string[], subject: string, what
 }
 
 /** `style <name> <attributes>` */
-function parseStyle(head: Token[], line: number): StyleStmt {
+function parseStyle(head: Token[], line: number, starts: ClauseStarts): StyleStmt {
   const name = requireName(head[1], 'style', line);
-  const attrs = attrsOnly(head, 2, line, `style "${name}"`);
+  const attrs = attrsOnly(head, 2, line, `style "${name}"`, starts);
   if (Object.keys(attrs).length === 0) {
     throw new SourceError(`style "${name}" sets nothing`, line);
   }
@@ -2198,8 +2200,8 @@ function parseIcon(head: Token[], line: number): IconStmt {
  * keys are refused rather than ignored: a misspelt diagram-wide setting that
  * silently does nothing is the kind of thing an author stares at for a while.
  */
-function parseDiagram(head: Token[], line: number): DiagramStmt {
-  const attrs = attrsOnly(head, 1, line, 'diagram');
+function parseDiagram(head: Token[], line: number, starts: ClauseStarts): DiagramStmt {
+  const attrs = attrsOnly(head, 1, line, 'diagram', starts);
   if (Object.keys(attrs).length === 0) {
     throw new SourceError('diagram sets nothing', line);
   }
@@ -2254,7 +2256,7 @@ function parseDiagram(head: Token[], line: number): DiagramStmt {
  * is permissive, because it names the kind it is for: a word that kind has no
  * use for can only be a mistake.
  */
-function parseDefault(head: Token[], line: number): DefaultStmt {
+function parseDefault(head: Token[], line: number, starts: ClauseStarts): DefaultStmt {
   let target = head[1];
   // `default guide node`: a shown guide's look, one line per kind.
   const guide = target !== undefined && !target.quoted && target.text === 'guide';
@@ -2285,7 +2287,7 @@ function parseDefault(head: Token[], line: number): DefaultStmt {
   if (!guide && extra && !extra.quoted && !isAttrKey(extra) && extra.text === 'node' && kind !== 'node') {
     throw new SourceError(`write \`default ${kind}\` — a ${kind} is already a node`, line);
   }
-  const attrs = attrsOnly(head, start, line, subject);
+  const attrs = attrsOnly(head, start, line, subject, starts);
   if (Object.keys(attrs).length === 0) {
     throw new SourceError(`${subject} sets nothing`, line);
   }
@@ -2360,12 +2362,13 @@ function readPlacement(
   at: number,
   line: number,
   subject: string,
+  starts: ClauseStarts,
   nested = false,
 ): { placement: Placement; next: number } {
   const word = tokens[at]!;
   // A placement read after its own distance or part (`6 above x`) is still
   // the clause that word began, so only the outermost read starts one.
-  if (!nested) clauseStarts?.add(word);
+  if (!nested) starts?.add(word);
   if (word.quoted) {
     throw new SourceError(`${subject}: unexpected text "${word.text}"`, line);
   }
@@ -2375,7 +2378,7 @@ function readPlacement(
   // the distance is required.
   if (!word.quoted && isPart(word.text) && !follows(tokens, at + 1, 'of') && !follows(tokens, at + 1, 'even')) {
     if (opensPartPlacement(tokens, at)) {
-      const read = readPlacement(tokens, at + 1, line, subject, true);
+      const read = readPlacement(tokens, at + 1, line, subject, starts, true);
       if (read.placement.kind !== 'offset') return read;
       return { placement: { ...read.placement, own: word.text }, next: read.next };
     }
@@ -2417,7 +2420,7 @@ function readPlacement(
           line,
         );
       }
-      const read = readPlacement(tokens, at + 3, line, subject, true);
+      const read = readPlacement(tokens, at + 3, line, subject, starts, true);
       if (read.placement.kind !== 'offset') return read;
       const y = vertical(first) ? first : second;
       const x = vertical(first) ? second : first;
@@ -2428,7 +2431,7 @@ function readPlacement(
         next: read.next,
       };
     }
-    const read = readPlacement(tokens, at + 1, line, subject, true);
+    const read = readPlacement(tokens, at + 1, line, subject, starts, true);
     if (read.placement.kind !== 'offset') return read;
     if (read.placement.gap !== undefined) {
       throw new SourceError(

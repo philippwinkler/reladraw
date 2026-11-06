@@ -242,8 +242,10 @@ function orderCells(cells: Cell[], settings: FormatSettings): Cell[] {
   const line = (some: Cell[]) => some.map((cell) => cell.text).filter((text) => text !== '').join(' ');
   try {
     return sameMeaning(line(cells), line(ordered)) ? ordered : cells;
-  } catch {
-    return cells;
+  } catch (error) {
+    // A clause that reads differently alone, or not at all, keeps its written order.
+    if (error instanceof SourceError) return cells;
+    throw error;
   }
 }
 
