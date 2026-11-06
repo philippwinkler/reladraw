@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assert, assertFound } from './assert.js';
 import { nearMatch, readChecks, type Checks, type Finding } from './checks.js';
 import { SourceError } from './errors.js';
 import { format } from './format.js';
@@ -90,6 +91,13 @@ function installSkill(args: string[]): number {
 }
 type Command = (typeof COMMANDS)[number];
 
+assert(COMMANDS.every((command) => USAGE.includes(`reladraw ${command}`)), 'the usage shows every command');
+assert(
+  ['-o', '--out', '--page', '--theme', '--guides', '--checks', '--no-checks', '--version', '--help', '--check', '--init'].every((option) => USAGE.includes(option)),
+  'the usage names every option the commands read',
+);
+assert(/^[a-z-]+@\d+\.\d+\.\d+$/.test(SKILLS_PACKAGE), 'the skills installer is pinned to one version');
+
 async function main(argv: string[]): Promise<number> {
   // Everything after install-skill is for skills, -h and -v included.
   if (argv[0] === 'install-skill') return installSkill(argv.slice(1));
@@ -104,7 +112,7 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  const verb = argv[0]!;
+  const verb = assertFound(argv[0], 'with no arguments the usage was printed, so a command was given');
   if (!(COMMANDS as readonly string[]).includes(verb)) {
     // A file where the command goes is the old form, and is told the new one;
     // anything else is a command that does not exist, with the near one.
@@ -131,7 +139,7 @@ async function main(argv: string[]): Promise<number> {
   let page = false;
 
   for (let i = 1; i < argv.length; i += 1) {
-    const arg = argv[i]!;
+    const arg = assertFound(argv[i], 'the arguments are read up to their end');
     if ((arg === '-o' || arg === '--out') && command === 'render') {
       out = argv[i + 1];
       if (out === undefined) {
@@ -208,10 +216,12 @@ async function main(argv: string[]): Promise<number> {
     overChecks = (fromFile) => readChecks(written, fromFile);
   }
 
+  assert(command === 'render' || command === 'check', 'format and install-skill went their own ways, so this draws');
+  assert(command === 'render' || (!page && out === undefined), 'only render writes, so only render takes -o or --page');
   const source = await readFile(input, 'utf8');
 
   const options: DrawOptions = {
-    ...(theme === undefined ? {} : { theme: THEMES[theme]! }),
+    ...(theme === undefined ? {} : { theme: assertFound(THEMES[theme], 'a --theme given was checked to name a theme') }),
     ...(guides ? { guides: true } : {}),
     // An icon's file is found from the diagram, not from wherever the tool
     // happens to be run.
@@ -287,6 +297,7 @@ async function formatFiles(args: string[]): Promise<number> {
   }
   if (files.includes('-')) return formatStandardInput(files, check);
 
+  assert(!init && files.length > 0 && !files.includes('-'), 'what is left to format is files named on the command line');
   let status = 0;
   const found = new Map<string, { path: string; settings: FormatSettings } | null>();
   for (const file of files) {
@@ -406,6 +417,7 @@ function nearestSettings(
     const parent = dirname(folder);
     result = parent === folder ? null : nearestSettings(parent, found);
   }
+  assert(!found.has(folder) && (result === null || folder.startsWith(dirname(result.path))), 'a folder\'s settings are worked out once, from it or a folder above it');
   found.set(folder, result);
   return result;
 }
