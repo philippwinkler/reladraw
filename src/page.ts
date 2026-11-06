@@ -1,3 +1,4 @@
+import { assert } from './assert.js';
 import type { Finding } from './checks.js';
 import { drawSource, type DrawOptions } from './pipeline.js';
 import { renderTagged, themeOf } from './render.js';
@@ -51,8 +52,13 @@ interface PageParts {
 
 /** A local time as `2026-11-05 14:32`, which sorts and reads the same everywhere. */
 function stamp(at: Date): string {
-  const two = (n: number) => String(n).padStart(2, '0');
-  return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
+  const two = (n: number) => {
+    assert(!(n < 0) && !(n > 99), 'a calendar or clock field fits in two digits');
+    return String(n).padStart(2, '0');
+  };
+  const text = `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())} ${two(at.getHours())}:${two(at.getMinutes())}`;
+  assert(Number.isNaN(at.getTime()) || /^\d+-\d\d-\d\d \d\d:\d\d$/.test(text), 'a time is stamped as year-month-day hours:minutes');
+  return text;
 }
 
 function page({ title, name, drawn, source, svg, tagged, findings, theme }: PageParts): string {
@@ -68,6 +74,19 @@ function page({ title, name, drawn, source, svg, tagged, findings, theme }: Page
     source,
     findings: findings.map((finding) => ({ kind: finding.kind, message: finding.message, line: finding.line })),
   };
+  assert([...PAGE.matchAll(/DATA\.(\w+)/g)].every(([, key]) => key !== undefined && key in data), 'every field the page\'s script reads is one it is given');
+  const colors = [
+    `--page: ${theme.background};`,
+    `--ink: ${theme.text};`,
+    `--muted: ${theme.mutedText};`,
+    `--rule: ${theme.boxStroke};`,
+    `--accent: ${theme.primary.color};`,
+    `--on-accent: ${theme.primary.on};`,
+  ];
+  assert(
+    [...PAGE.matchAll(/var\(--([a-z-]+)\)/g)].every(([, color]) => colors.some((set) => set.startsWith(`--${color}:`))),
+    'every color the page\'s style uses is one the theme sets',
+  );
   // Replaced by functions, so a `$` in a title or a drawing is taken as written.
   // The zoom's code goes in first, so nothing a diagram says can be taken for its marker.
   return PAGE.replace('{{panzoom}}', () => PAN_ZOOM)
@@ -75,29 +94,24 @@ function page({ title, name, drawn, source, svg, tagged, findings, theme }: Page
     .replace('{{title}}', () => escapeHtml(title))
     .replace('{{heading}}', () => escapeHtml(title))
     .replace('{{drawn}}', () => escapeHtml(drawn))
-    .replace('{{colors}}', () =>
-      [
-        `--page: ${theme.background};`,
-        `--ink: ${theme.text};`,
-        `--muted: ${theme.mutedText};`,
-        `--rule: ${theme.boxStroke};`,
-        `--accent: ${theme.primary.color};`,
-        `--on-accent: ${theme.primary.on};`,
-      ].join(' '),
-    )
+    .replace('{{colors}}', () => colors.join(' '))
     .replace('{{drawing}}', () => tagged)
     .replace('{{data}}', () => scriptJson(data));
 }
 
 function escapeHtml(text: string): string {
   // `{` too, so a title or file name can't be taken for a later marker.
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\{/g, '&#123;');
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/\{/g, '&#123;');
+  assert(!/[<>"{]/.test(escaped), 'escaped text holds nothing that could end a tag or start a marker');
+  return escaped;
 }
 
 /** JSON that can sit inside a `<script>` without ending it. */
 function scriptJson(value: unknown): string {
-  return JSON.stringify(value)
+  const json = JSON.stringify(value)
     .replace(/</g, '\\u003c');
+  assert(!json.includes('<') && JSON.stringify(JSON.parse(json)) === JSON.stringify(value), 'the page\'s data holds no < and reads back as itself');
+  return json;
 }
 
 const PAGE = `<!doctype html>
@@ -512,3 +526,14 @@ const PAGE = `<!doctype html>
 </body>
 </html>
 `;
+
+const PAGE_MARKERS = ['{{panzoom}}', '{{scheme}}', '{{title}}', '{{heading}}', '{{drawn}}', '{{colors}}', '{{drawing}}', '{{data}}'];
+assert(
+  PAGE_MARKERS.every((marker) => PAGE.split(marker).length === 2) && PAGE.split('{{').length === PAGE_MARKERS.length + 1,
+  'the page holds each marker once, and nothing else that reads as one',
+);
+assert(!PAN_ZOOM.includes('{{'), 'the zoom\'s code, put in first, holds nothing a later replacement could take for its marker');
+assert(
+  [...PAGE.matchAll(/getElementById\('([^']+)'\)/g)].every(([, id]) => PAGE.split(`id="${id}"`).length === 2),
+  'every element the page\'s script looks up is on the page, once',
+);
