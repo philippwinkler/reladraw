@@ -7,6 +7,7 @@
  * anything: the picture is drawn as written, and this says where it may not
  * read as the writer meant.
  */
+import { assert, assertFound } from './assert.js';
 import { isWithin, joinedToText, type Layout, type LayoutEdge, type LayoutNode } from './model.js';
 import { ARROW_MARKER_WIDTH, LINE_WIDTH, UNIT, arrowLength } from './constants.js';
 import { centerOf, crossingPoints, describeEdge, faceOfNode, traceRoute, traceVisible, type Face, type Point, type SideEnds } from './lines.js';
@@ -120,6 +121,7 @@ export function findings(picture: Picture, checks: Checks): Finding[] {
     if (checks['edge-crossings']) found.push(...edgeCrossings(picture));
     if (checks['text-overlap']) found.push(...textOverlaps(picture));
   }
+  assert(found.every((finding) => checks[finding.kind]), 'only a check that is on finds anything');
   return found.sort((a, b) => a.line - b.line);
 }
 
@@ -173,13 +175,15 @@ function dropInner(found: Finding[], layout: Layout): Finding[] {
     const { prefix, node } = key(finding);
     return `${prefix}\n${node?.name}`;
   }));
-  return found.filter((finding) => {
+  const kept = found.filter((finding) => {
     const { prefix, node } = key(finding);
     for (let at = node?.parent; at; at = at.parent) {
       if (reported.has(`${prefix}\n${at.name}`)) return false;
     }
     return true;
   });
+  assert(kept.length > 0 || found.length === 0, 'the outermost box a line crosses is always reported');
+  return kept;
 }
 
 /**
@@ -235,13 +239,13 @@ function crossing(trace: { x: number; y: number }[], box: { x: number; y: number
       [Math.abs(p.x - (box.x + box.width)), 'right'],
     ];
     distances.sort((a, b) => a[0] - b[0]);
-    return distances[0]![1];
+    return assertFound(distances[0], 'a box has a nearest side')[1];
   };
   let enters: string | undefined;
   let leaves: string | undefined;
   for (let index = 1; index < trace.length; index += 1) {
-    const a = trace[index - 1]!;
-    const b = trace[index]!;
+    const a = assertFound(trace[index - 1], 'a step of a trace starts on it');
+    const b = assertFound(trace[index], 'a step of a trace ends on it');
     const clip = clipSegment(a, b, box);
     if (clip === undefined) continue;
     if (enters === undefined) enters = inside(a) ? 'middle' : sideAt(clip[0]);
@@ -271,11 +275,11 @@ function crossingCircle(trace: { x: number; y: number }[], node: LayoutNode, fac
   };
   let enters: string | undefined;
   let leaves: string | undefined;
-  let was = inside(trace[0]!);
+  let was = inside(assertFound(trace[0], 'a drawn line has a first point'));
   if (was) enters = 'middle';
   for (let index = 1; index < trace.length; index += 1) {
-    const a = trace[index - 1]!;
-    const b = trace[index]!;
+    const a = assertFound(trace[index - 1], 'a step of a trace starts on it');
+    const b = assertFound(trace[index], 'a step of a trace ends on it');
     const steps = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 2));
     for (let step = 1; step <= steps; step += 1) {
       const p = { x: a.x + ((b.x - a.x) * step) / steps, y: a.y + ((b.y - a.y) * step) / steps };
@@ -316,6 +320,7 @@ function clipSegment(
     else t1 = Math.min(t1, t);
     if (t0 >= t1) return undefined;
   }
+  assert(!(t0 < 0 || t0 >= t1 || t1 > 1), 'what is left of a clipped segment is a stretch of it');
   return [
     { x: a.x + dx * t0, y: a.y + dy * t0 },
     { x: a.x + dx * t1, y: a.y + dy * t1 },
@@ -340,8 +345,8 @@ class Grid {
   near(trace: { x: number; y: number }[]): LayoutNode[] {
     const found = new Set<LayoutNode>();
     for (let index = 1; index < trace.length; index += 1) {
-      const a = trace[index - 1]!;
-      const b = trace[index]!;
+      const a = assertFound(trace[index - 1], 'a step of a trace starts on it');
+      const b = assertFound(trace[index], 'a step of a trace ends on it');
       for (const key of this.keys(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x), Math.max(a.y, b.y))) {
         for (const node of this.cells.get(key) ?? []) found.add(node);
       }
@@ -370,7 +375,9 @@ function edgesWithNoLength(picture: Picture): Finding[] {
     const points = picture.route(edge).points;
     let length = 0;
     for (let index = 1; index < points.length; index += 1) {
-      length += Math.hypot(points[index]!.x - points[index - 1]!.x, points[index]!.y - points[index - 1]!.y);
+      const a = assertFound(points[index - 1], 'a step of a line starts on it');
+      const b = assertFound(points[index], 'a step of a line ends on it');
+      length += Math.hypot(b.x - a.x, b.y - a.y);
     }
     if (length >= 1) continue;
     found.push(
@@ -402,8 +409,8 @@ function crowdedEnds(sides: SideEnds[]): Finding[] {
     let want = 0;
     const anyMark = drawn.some((end) => end.edge.marks[end.which] !== 'none');
     for (let index = 1; index < drawn.length; index += 1) {
-      const a = drawn[index - 1]!;
-      const b = drawn[index]!;
+      const a = assertFound(drawn[index - 1], 'ends on a side are neighbors in order');
+      const b = assertFound(drawn[index], 'ends on a side are neighbors in order');
       const apart = Math.abs(across ? b.at.x - a.at.x : b.at.y - a.at.y);
       const marked = a.edge.marks[a.which] !== 'none' || b.edge.marks[b.which] !== 'none';
       const needed = marked
@@ -486,8 +493,8 @@ function edgeOverlaps(picture: Picture): Finding[] {
     if (edge.guide) continue;
     for (const trace of traceVisible(picture.route(edge))) {
       for (let index = 1; index < trace.length; index += 1) {
-        const a = trace[index - 1]!;
-        const b = trace[index]!;
+        const a = assertFound(trace[index - 1], 'a step of a trace starts on it');
+        const b = assertFound(trace[index], 'a step of a trace ends on it');
         if (Math.hypot(b.x - a.x, b.y - a.y) < EPSILON) continue;
         segments.push({ edge, a, b, minX: Math.min(a.x, b.x), maxX: Math.max(a.x, b.x) });
       }
@@ -551,6 +558,7 @@ function runShared(p: { a: Point; b: Point }, q: { a: Point; b: Point }, near: n
   const length = Math.hypot(p.b.x - p.a.x, p.b.y - p.a.y);
   const along = { x: (p.b.x - p.a.x) / length, y: (p.b.y - p.a.y) / length };
   const qLength = Math.hypot(q.b.x - q.a.x, q.b.y - q.a.y);
+  assert(!(length <= 0 || qLength <= 0), 'only segments with length share a run');
   const sine = Math.abs(along.x * (q.b.y - q.a.y) - along.y * (q.b.x - q.a.x)) / qLength;
   if (sine > 0.05) return 0;
   const position = (point: Point) => along.x * (point.x - p.a.x) + along.y * (point.y - p.a.y);
@@ -790,7 +798,9 @@ function acrossLine(trace: { x: number; y: number }[], extent: { minX: number; m
   const inner = { x: extent.minX + 1, y: extent.minY + 1, width: extent.maxX - extent.minX - 2, height: extent.maxY - extent.minY - 2 };
   if (inner.width <= 0 || inner.height <= 0) return false;
   for (let index = 1; index < trace.length; index += 1) {
-    if (clipSegment(trace[index - 1]!, trace[index]!, inner) !== undefined) return true;
+    const a = assertFound(trace[index - 1], 'a step of a trace starts on it');
+    const b = assertFound(trace[index], 'a step of a trace ends on it');
+    if (clipSegment(a, b, inner) !== undefined) return true;
   }
   return false;
 }
@@ -1044,5 +1054,7 @@ function editDistance(a: string, b: string): number {
     }
     row = next;
   }
-  return row[b.length]!;
+  const distance = assertFound(row[b.length], 'the last row reaches the end of the second word');
+  assert(distance >= Math.abs(a.length - b.length) && distance <= Math.max(a.length, b.length), 'an edit distance lies between the words\' difference in length and the longer length');
+  return distance;
 }
