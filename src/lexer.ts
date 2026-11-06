@@ -1,3 +1,4 @@
+import { assert } from './assert.js';
 import { SourceError } from './errors.js';
 
 export interface Token {
@@ -143,6 +144,7 @@ export function tokenizeLine(line: string, lineNumber: number, depth = 0): Token
       // `rgb(20,20,20)` whole.
       if (c === ',' && !text.includes('(')) break;
     }
+    assert(text.length > 0 && i > start, 'a word takes at least one character, so the line is read to its end');
     // `gap:tight` is `gap: tight` with no space, since how much whitespace there
     // is never matters. A word straight after a key is its value and is left
     // whole, so `icon: a:b` still names an icon called `a:b`. The rest of the
@@ -151,6 +153,7 @@ export function tokenizeLine(line: string, lineNumber: number, depth = 0): Token
     const previous = tokens[tokens.length - 1];
     const joined = previous && isAttrKey(previous) ? null : JOINED_KEY.exec(text);
     if (joined) {
+      assert(joined[1]!.length < text.length, 'a key split from its value leaves the value to read next');
       tokens.push({ text: joined[1]!, quoted: false, joined: text, start, end: start + joined[1]!.length });
       i = start + joined[1]!.length;
       continue;
@@ -165,6 +168,10 @@ export function tokenizeLine(line: string, lineNumber: number, depth = 0): Token
     tokens.push({ text, quoted: false, start, end: i });
   }
 
+  assert(
+    tokens.every((token) => token.start !== undefined && token.end !== undefined && token.start < token.end && token.end <= line.length),
+    'every token read is a stretch of its line',
+  );
   return tokens;
 }
 

@@ -18,6 +18,7 @@
  * line breaking and wrapping carry the runs along rather than re-parsing text
  * that has already been read.
  */
+import { assert } from './assert.js';
 import { SourceError } from './errors.js';
 
 /** A stretch of text drawn in one style. `style` is a style name from the file. */
@@ -115,6 +116,7 @@ export function parseMarkup(text: string, subject: string, line: number): Run[] 
     throw new SourceError(`${subject}: "[${open}]" is never closed`, line);
   }
   flush();
+  assert(runs.every((run) => run.text.length > 0), 'markup leaves no empty run');
   return runs;
 }
 
@@ -163,7 +165,9 @@ function tidy(lines: Line[]): Line[] {
       .filter((run) => run.text.length > 0);
     if (runs.length > 0) kept.push(runs);
   }
-  return kept.length > 0 ? kept : [[{ text: '' }]];
+  const tidied = kept.length > 0 ? kept : [[{ text: '' }]];
+  assert(tidied.length > 0 && tidied.every((line) => line.length > 0), 'a text has a line at least, and every line a run');
+  return tidied;
 }
 
 /** Fold one line onto several at word boundaries, never exceeding `columns`. */
@@ -183,7 +187,13 @@ export function wrapLine(line: Line, columns: number): Line[] {
     length += (length === 0 ? 0 : 1) + word.text.length;
   }
   if (current.length > 0) lines.push(current);
-  return lines.length > 0 ? lines : [[{ text: '' }]];
+  const wrapped = lines.length > 0 ? lines : [[{ text: '' }]];
+  assert(
+    wrapped.flatMap(words).map((word) => word.text).join(' ') === words(line).map((word) => word.text).join(' '),
+    'wrapping keeps every word, in order',
+  );
+  assert(wrapped.every((one) => plain(one).length <= columns || words(one).length === 1), 'a wrapped line fits, unless it is one word too long to');
+  return wrapped;
 }
 
 /** The line's words, each carrying the style of the run it came from. */
