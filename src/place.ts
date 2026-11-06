@@ -420,6 +420,7 @@ export class Placer {
       this.refusePlacedTwice(node, axis);
       return above + this.start(node, axis) - this.frame(node, axis).boxStart;
     });
+    assert(!this.origins.has(key), 'an origin is worked out once, then remembered');
     this.origins.set(key, worked);
     return worked;
   }
@@ -567,6 +568,7 @@ export class Placer {
     const worked = this.guard(`frame\n${key}`, node, axis, undefined, () =>
       this.vennPart(node) === 1 ? this.stripFrame(node, axis) : this.fit(node, axis),
     );
+    assert(!this.frames.has(key), 'a frame is worked out once, then remembered');
     this.frames.set(key, worked);
     return worked;
   }
@@ -577,6 +579,7 @@ export class Placer {
     const known = this.outlines.get(key);
     if (known) return known;
     const worked = this.guard(`outline\n${key}`, node, axis, undefined, () => this.roomFor(node, axis));
+    assert(!this.outlines.has(key), 'an outline is worked out once, then remembered');
     this.outlines.set(key, worked);
     return worked;
   }
@@ -628,7 +631,7 @@ export class Placer {
   /** How much nearer than its gap a limit's two ends are, in a trial frame of their container. */
   private shortfall(node: LayoutNode, axis: Axis, { subject, limit }: { subject: LayoutNode; limit: Limit }, at: FrameAxis): number {
     const own = this.memberAt(subject, node, axis, at);
-    const other = limit.target.name === node.name ? { start: at.textStart, size: at.textSize } : this.memberAt(this.byName.get(limit.target.name)!, node, axis, at);
+    const other = limit.target.name === node.name ? { start: at.textStart, size: at.textSize } : this.memberAt(assertFound(this.byName.get(limit.target.name), 'a limit\'s target, once checked, exists'), node, axis, at);
     const gap = this.limitGap(subject, limit);
     const toward = limit.way === 'above' || limit.way === 'left';
     return toward ? own.start + own.size + gap - other.start : other.start + other.size + gap - own.start;
@@ -637,7 +640,7 @@ export class Placer {
   /** The distance a limit keeps: its gap, or the usual one; beside a text, as beside any text. */
   private limitGap(subject: LayoutNode, limit: Limit): number {
     if (limit.gap !== undefined) return gapPixels(limit.gap, `"${subject.name}"`, limit.line);
-    const parent = subject.parent!;
+    const parent = assertFound(subject.parent, 'a limit is kept inside a box');
     if (limit.target.name === parent.name) return this.hasTitle(parent) ? UNIT : 0;
     return GAPS['normal']!;
   }
@@ -665,6 +668,7 @@ export class Placer {
     if (known !== undefined) return known;
     const kind = memo === this.starts ? 'start' : memo === this.owns ? 'own' : memo === this.unitStarts ? 'unit' : 'size';
     const worked = this.guard(`${kind}\n${key}`, node, axis, undefined, work);
+    assert(!memo.has(key), 'a quantity is worked out once, then remembered');
     memo.set(key, worked);
     return worked;
   }
@@ -771,8 +775,7 @@ export class Placer {
     const statements = this.statements(node, axis);
     if (statements.length === 0) return this.axisAnchors.has(`${node.name}\n${axis}`) ? 0 : this.lone(node, axis);
     if (statements.length === 1) {
-      const [only] = statements;
-      return this.apply(node, axis, only!);
+      return this.apply(node, axis, assertFound(statements[0], 'one statement is there when one is counted'));
     }
     const [first, second] = statements as [Statement, Statement];
     if (first.kind !== 'align' && second.kind !== 'align' && first.kind !== second.kind) {
@@ -863,10 +866,10 @@ export class Placer {
         node.line,
       );
     }
-    const [offset] = offsets;
+    const offset = assertFound(offsets[0], 'one placement is there when one is counted');
     return this.guard(`lone\n${node.name}\n${axis}`, node, axis, offset, () => {
-      const at = this.region(node, offset!, axis);
-      const own = this.ownPart(node, offset!, axis);
+      const at = this.region(node, offset, axis);
+      const own = this.ownPart(node, offset, axis);
       return at.start + at.size / 2 - own.start - own.size / 2;
     });
   }
@@ -1249,8 +1252,8 @@ export class Placer {
    * from each, and that is checked (design.org 4.3).
    */
   private crossingOf(node: LayoutNode, point: Extract<PointExpr, { kind: 'from' }>, axis: Axis, placement: Placement): Extent {
-    const upright = point.lines.find((line) => line.way === 'up' || line.way === 'down')!;
-    const level = point.lines.find((line) => line.way === 'left' || line.way === 'right' || line.way === 'even')!;
+    const upright = assertFound(point.lines.find((line) => line.way === 'up' || line.way === 'down'), 'a crossing, as read, has an upright line');
+    const level = assertFound(point.lines.find((line) => line.way === 'left' || line.way === 'right' || line.way === 'even'), 'a crossing, as read, has a level line');
     const written = describePoint(point);
     /**
      * Where a line from this thing runs, on the axis it holds still. A line
@@ -1601,14 +1604,14 @@ export class Placer {
 
   /** Work out one size key's value, in pixels. */
   private measure(node: LayoutNode, key: string, written: string): number {
-    const dimension = SIZE_KEYS[key]!;
+    const dimension = assertFound(SIZE_KEYS[key], 'only a size key is measured');
     const axis: Axis = dimension === 'width' ? 'x' : 'y';
     const size = storedSize(written, key, `"${node.name}"`, node.line);
     return this.guard(`measure\n${node.name}\n${key}`, node, axis, undefined, () => this.evaluate(node, key, size), `${key}: ${written}`);
   }
 
   private evaluate(node: LayoutNode, key: string, size: SizeExpr): number {
-    const dimension = SIZE_KEYS[key]!;
+    const dimension = assertFound(SIZE_KEYS[key], 'only a size key is measured');
     const facts = this.factsOf(node);
     switch (size.kind) {
       case 'number':
@@ -1948,7 +1951,7 @@ export class Placer {
     if (placements.length === 0) return undefined;
     const subject = `"${node.name}"'s title`;
     const said = placements.map((placement) => `"${describePlacement(placement)}"`).join(' and ');
-    const line = placements[0]!.line;
+    const line = assertFound(placements[0], 'a title with placements has a first').line;
     // Opposite placements center the title between them, as they center a box (5.3).
     const ways = placements.map((placement) => (placement.kind === 'offset' ? component(placement.direction, axis) : undefined));
     const opposite = placements.length === 2 && ways[0] !== undefined && ways[1] !== undefined && ways[0] !== ways[1];
@@ -2086,7 +2089,7 @@ export class Placer {
           this.laid.set(`${child.name}\n${axis}`, { start: index * layout.centers - size / 2 });
         } else {
           this.laid.set(`${child.name}\n${axis}`, { start: cursor });
-          cursor += size + layout.gap!;
+          cursor += size + assertFound(layout.gap, 'a layout spaced without centers: has a gap');
         }
       });
     } else {
@@ -2194,7 +2197,7 @@ export class Placer {
         // it in the venn's frame is where the frame goes.
         return this.apply(anchor, axis, this.statements(anchor, axis)[0]!);
       }
-      const venn = part.parent!;
+      const venn = assertFound(part.parent, 'a venn\'s part is inside its venn');
       const [left, shared, right] = this.vennOf(venn).parts;
       const own = this.partContent(part, axis);
       const align = this.vennAlign(venn);
@@ -2248,7 +2251,8 @@ export class Placer {
       if (free(other, written)) return { mover: other, side, by: -by, boxOnly: false };
       const held = [other, written, shared]
         .flatMap((part) => this.contentOf(part))
-        .find((child) => this.acrossParts(child))!;
+        .find((child) => this.acrossParts(child));
+      assert(held !== undefined, 'a set not free to move holds a box placed across the parts');
       const said = placement ? `"${written.name}" has "${describePlacement(placement)}"` : `venn "${venn.name}" has align-children: ${side === 'start' ? 'top' : 'bottom'}`;
       throw new SourceError(
         `${said}, and "${held.name}" being placed against another part already decides where the two sets sit up and down — say it once`,
@@ -2334,7 +2338,7 @@ export class Placer {
    * `boxOnly`) moves the side it names, and the box must still hold its contents.
    */
   private vennBox(set: LayoutNode): Extent | undefined {
-    const venn = set.parent!;
+    const venn = assertFound(set.parent, 'a venn\'s set is inside its venn');
     const facts = this.vennOf(venn);
     const plan = this.vennPlan(venn, 'y');
     const natural = (part: LayoutNode): { start: number; end: number } => {
@@ -2388,7 +2392,7 @@ export class Placer {
    * the set whose top is lower, so the strip's contents start below it.
    */
   private stripFrame(node: LayoutNode, axis: Axis): FrameAxis {
-    const venn = node.parent!;
+    const venn = assertFound(node.parent, 'a venn\'s strip is inside its venn');
     const [left, , right] = this.vennOf(venn).parts;
     const plan = this.vennPlan(venn, axis);
     const strip = this.strip(venn, axis);
@@ -2686,7 +2690,9 @@ export class Placer {
       const text = this.leafText(node);
       const start = axis === 'x' ? text.x : text.y;
       const size = axis === 'x' ? text.width : text.height;
-      return { low: Math.max(0, -start), high: Math.max(0, start + size - this.size(node, axis)) };
+      const leaf = { low: Math.max(0, -start), high: Math.max(0, start + size - this.size(node, axis)) };
+      assert(!(leaf.low < 0 || leaf.high < 0), 'a text reaches out past a box, never in');
+      return leaf;
     }
     const frame = this.frame(node, axis);
     const end = frame.boxStart + frame.boxSize;
@@ -2702,6 +2708,7 @@ export class Placer {
       low = Math.max(low, frame.boxStart - (start - reach.low));
       high = Math.max(high, start + this.size(child, axis) + reach.high - end);
     }
+    assert(!(low < 0 || high < 0), 'what a box holds reaches out past it, never in');
     return { low, high };
   }
 }
