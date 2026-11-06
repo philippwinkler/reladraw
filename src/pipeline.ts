@@ -1,3 +1,4 @@
+import { assert } from './assert.js';
 import { fileChecks, findings, type Checks, type Finding } from './checks.js';
 import { SourceError } from './errors.js';
 import { blame, parse } from './parser.js';
@@ -36,6 +37,9 @@ export function drawSource<T>(
   try {
     return run(source);
   } catch (error) {
-    throw error instanceof SourceError ? blame(source, error, run) : error;
+    if (!(error instanceof SourceError)) throw error;
+    const blamed = blame(source, error, run);
+    assert(blamed.message === error.message && blamed.line >= error.line, 'blame moves an error to a later line of its statement, and never changes what it says');
+    throw blamed;
   }
 }

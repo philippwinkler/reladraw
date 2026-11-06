@@ -22,6 +22,7 @@ export { DARK_THEME, DEFAULT_THEME, THEMES, THEME_NAMES, type Theme } from './th
 export { pictureOf, type Picture } from './picture.js';
 export { type DrawOptions } from './pipeline.js';
 
+import { assert } from './assert.js';
 import type { Finding } from './checks.js';
 import { drawSource, type DrawOptions } from './pipeline.js';
 import { render, type RenderOptions } from './render.js';
@@ -33,7 +34,9 @@ import type { ResolveOptions } from './resolve.js';
  * the statement starts on; see `blame`.
  */
 export function compile(source: string, options: ResolveOptions & RenderOptions = {}): string {
-  return draw(source, { ...options, checks: false }).svg;
+  const made = draw(source, { ...options, checks: false });
+  assert(made.findings.length === 0, 'with the checks off, nothing is found');
+  return made.svg;
 }
 
 /**
