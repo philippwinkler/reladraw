@@ -3,6 +3,8 @@
  * these types are a faithful record of what the author wrote, and no more.
  */
 
+import { assert } from './assert.js';
+
 export const DIRECTIONS = [
   'above',
   'below',
@@ -994,6 +996,31 @@ export type NodeCorners = (typeof NODE_CORNERS)[number];
 export const ALL_ATTR_KEYS: readonly string[] = [
   ...new Set([...Object.values(ATTR_KEYS).flat(), ...DIAGRAM_KEYS, ...REGION_KEYS]),
 ];
+
+// What the word tables above promise each other, checked once as the module loads.
+assert(
+  ([DIRECTIONS, SIDES, POSITIONS, PARTS, WAYS, MARKS, POINT_TEXT_SIDES] as readonly (readonly string[])[]).every((list) => new Set(list).size === list.length),
+  'no word is listed twice in one vocabulary',
+);
+assert(SIDES.every((side) => (SIDE_AXIS[side] === 'x') === (side === 'left' || side === 'right')), 'a left or right side, and only those, is measured across');
+assert(DIRECTIONS.every((direction) => OPPOSITE[direction] !== direction && OPPOSITE[OPPOSITE[direction]] === direction), 'every direction has one other way round, whose other way round is itself');
+assert(PARTS.every((part) => (INWARD[part] === undefined) === (part === 'text' || part === 'center')), 'every part on a boundary, and only those, has a way inward');
+assert(Object.entries(PASSAGE_AXES).every(([word, axis]) => describeAxis(axis) === word), 'a passage\'s axis is described by the word that names it');
+assert(Object.keys(LINE_VALUES).every((key) => (LINE_KEYS as readonly string[]).includes(key)), 'every line setting with a fixed set of values is a line setting');
+assert(
+  [...Object.values(MARK_GLYPHS.from)].sort().join() === [...Object.values(MARK_GLYPHS.to)].sort().join() &&
+    !Object.values(MARK_GLYPHS.from).includes('none'),
+  'the glyphs at each end stand for the same marks, and none of them for no mark',
+);
+assert(POINT_TEXT_SIDES.every((side) => (DIRECTIONS as readonly string[]).includes(side)), 'every side a point\'s text takes is a direction');
+assert(
+  DEFAULT_TARGETS.every((target) => DEFAULT_KEYS[target].includes('style') && (target.includes(' ') ? target.startsWith('guide ') : true)),
+  'every default takes a style, and the two-word ones are a shown guide\'s',
+);
+assert(
+  Object.values(ATTR_KEYS).every((keys) => new Set(keys).size === keys.length && ['style', 'text', 'url', 'depth'].every((key) => keys.includes(key))),
+  'every kind takes style, text, url and depth, each key once',
+);
 
 export interface StyleStmt {
   kind: 'style';

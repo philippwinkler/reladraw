@@ -9,6 +9,7 @@
  */
 import type { Token } from './lexer.js';
 import { isAttrKey } from './lexer.js';
+import { SIZE_KEY_NAMES } from './ast.js';
 import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 
@@ -35,6 +36,13 @@ export const SIZE_KEYS: Record<string, Dimension> = {
   'min-height': 'height',
   'max-height': 'height',
 };
+assert(
+  Object.keys(SIZE_KEYS).length === SIZE_KEY_NAMES.length && SIZE_KEY_NAMES.every((key) => {
+    const dimension = SIZE_KEYS[key];
+    return dimension !== undefined && key.endsWith(dimension);
+  }),
+  'the size keys the parser reads are the ones the vocabulary lists, each measuring the dimension it names',
+);
 
 const SPAN_SIDES: readonly string[] = ['top', 'bottom', 'left', 'right', 'center'];
 const RESERVED = new Set(['and', 'of', 'to', '+', '(', ')', 'larger', 'smaller']);
