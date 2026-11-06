@@ -19,8 +19,9 @@
  * when a diagram asks for a distinction it cannot otherwise make.
  */
 
+import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
-import { readShapeLook, type ShapeLook } from './outline.js';
+import { readShapeLook, SHAPE_SETTINGS, type ShapeLook } from './outline.js';
 
 /**
  * Icons carry three tones rather than colors. `ink` is the drawn line, `shade`
@@ -209,6 +210,21 @@ export type Outline = (typeof OUTLINES)[number];
 
 /** Every value `shape:` accepts, `none` included. */
 export const SHAPE_WORDS = [...OUTLINES, 'none'] as const;
+assert(
+  new Set<string>(SHAPE_WORDS).size === SHAPE_WORDS.length && ICON_NAMES.every((name) => !(SHAPE_WORDS as readonly string[]).includes(name)),
+  'every shape word names one shape, and no picture shares a name with one',
+);
+assert(
+  Object.keys(SHAPE_SETTINGS).every((outline) => (OUTLINES as readonly string[]).includes(outline)),
+  'only an outline takes settings',
+);
+assert(
+  Object.values(ICONS).every((icon) =>
+    'grid' in icon && icon.grid > 0 && icon.paths.length > 0 &&
+    icon.paths.every((path) => path.d.startsWith('M') && (path.fill !== undefined || path.stroke !== undefined)),
+  ),
+  'every drawn picture has a grid and paths, each starting with a move and drawn in some tone',
+);
 
 /**
  * What a node is drawn as: an outline, a picture, or nothing at all.
@@ -336,6 +352,7 @@ export function iconNamed(named: string, line: number, declared: ReadonlyMap<str
     const all = [...new Set([...ICON_NAMES, ...declared.keys()])];
     throw new SourceError(`there is no icon called "${named}". The icons are ${all.join(', ')}${was}`, line);
   }
+  assert('grid' in icon || 'inner' in icon, 'an icon is drawn or pasted');
   return icon;
 }
 
@@ -373,8 +390,8 @@ export function pastedIcon(source: string, name: string, line: number): PastedIc
   let inner = open[2] === '/' ? '' : source.slice(bodyStart, end);
 
   const attrs = new Map<string, string>();
-  for (const [, key, value] of open[1]!.matchAll(/([^\s=]+)(?:\s*=\s*("[^"]*"|'[^']*'))?/g)) {
-    attrs.set(key!, value ?? '""');
+  for (const [, key, value] of assertFound(open[1], 'the tag\'s attributes are read, if only as none').matchAll(/([^\s=]+)(?:\s*=\s*("[^"]*"|'[^']*'))?/g)) {
+    attrs.set(assertFound(key, 'every attribute read has a name'), value ?? '""');
   }
   // The placement sets where the drawing goes and how big it is, and a nested
   // <svg> needs no namespace of its own.
@@ -398,6 +415,10 @@ export function pastedIcon(source: string, name: string, line: number): PastedIc
     }
     attrs.set('viewBox', `"0 0 ${w} ${h}"`);
   }
+  assert(
+    attrs.has('viewBox') && ![...attrs.keys()].some((key) => ['x', 'y', 'width', 'height', 'version', 'xmlns'].includes(key) || key.startsWith('xmlns:')),
+    'a pasted drawing keeps its viewBox and none of the size and place the placement sets',
+  );
 
   // The output declares no xlink namespace, and SVG 2 reads a plain `href`.
   inner = inner.replace(/\sxlink:href=/g, ' href=');
@@ -407,7 +428,7 @@ export function pastedIcon(source: string, name: string, line: number): PastedIc
   // An id is renamed where it is defined and where it is referred to, which is
   // `url(#…)` or `href="#…"` — never a bare `#…`, which may be a color.
   for (const [, , double, single] of inner.matchAll(/\sid\s*=\s*("([^"]*)"|'([^']*)')/g)) {
-    const id = double ?? single!;
+    const id = assertFound(double ?? single, 'an id is quoted one way or the other');
     const pattern = escape(id);
     inner = inner
       .replace(new RegExp(`(\\sid\\s*=\\s*["'])${pattern}(["'])`, 'g'), `$1${prefix}${id}$2`)
@@ -418,7 +439,7 @@ export function pastedIcon(source: string, name: string, line: number): PastedIc
   // <style> blocks, since a stylesheet in an SVG applies to the whole document.
   const classes = new Set<string>();
   for (const [, , double, single] of inner.matchAll(/\sclass\s*=\s*("([^"]*)"|'([^']*)')/g)) {
-    for (const each of (double ?? single!).split(/\s+/)) if (each !== '') classes.add(each);
+    for (const each of assertFound(double ?? single, 'a class is quoted one way or the other').split(/\s+/)) if (each !== '') classes.add(each);
   }
   inner = inner.replace(/(\sclass\s*=\s*["'])([^"']*)/g, (_, key: string, value: string) =>
     key + value.replace(/[^\s]+/g, (each) => prefix + each),
