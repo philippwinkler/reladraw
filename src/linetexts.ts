@@ -10,7 +10,8 @@
  * The renderer and the checks both place texts through here, so what is
  * reported is what is drawn.
  */
-import type { TextSide } from './ast.js';
+import { assert, assertFound } from './assert.js';
+import { WAYS, type TextSide } from './ast.js';
 import { arrowLength } from './constants.js';
 import { SourceError } from './errors.js';
 import type { LayoutEdge, LayoutEdgeText } from './model.js';
@@ -66,7 +67,17 @@ function measured(points: Point[]): Measured {
     const [a, b] = [points[index - 1]!, points[index]!];
     lengths.push(lengths[index - 1]! + Math.hypot(b.x - a.x, b.y - a.y));
   }
+  assert(
+    lengths.length === Math.max(1, points.length) && lengths.every((length, index) => index === 0 || !(length < lengths[index - 1]!)),
+    'a line measured has a distance at each point, from zero, never going back',
+  );
   return { points, lengths, total: lengths[lengths.length - 1]! };
+}
+
+/** Whether `s` is a distance along the line, from its start to its end, give or take rounding. */
+function liesAlong(line: Measured, s: number): boolean {
+  const slack = 1e-6 * (1 + line.total);
+  return !(s < -slack) && !(s > line.total + slack);
 }
 
 /**
@@ -100,6 +111,7 @@ function pieceHolding(line: Measured, s: number): number {
   // A spot at a corner belongs to the piece after it, and a piece of no length to its neighbor.
   while (index < line.points.length - 1 && line.lengths[index]! - line.lengths[index - 1]! < 1e-9) index += 1;
   while (index > 1 && line.lengths[index]! - line.lengths[index - 1]! < 1e-9) index -= 1;
+  assert(index >= 1 && index <= Math.max(1, line.points.length - 1), 'the piece holding a spot is one of the line\'s pieces');
   return index;
 }
 
@@ -137,6 +149,7 @@ function distanceTo(line: Measured, p: Point): number {
       best = line.lengths[index - 1]! + t * Math.sqrt(span);
     }
   }
+  assert(liesAlong(line, best), 'the nearest point is on the line');
   return best;
 }
 
@@ -172,6 +185,7 @@ function firstMeeting(line: Measured, origin: Point, way: Point): number | undef
       found = line.lengths[index - 1]! + Math.min(1, Math.max(0, t)) * (line.lengths[index]! - line.lengths[index - 1]!);
     }
   }
+  assert(found === undefined || liesAlong(line, found), 'where a ray meets the line is on the line');
   return found;
 }
 
@@ -184,7 +198,9 @@ function firstReaching(line: Measured, axis: 'x' | 'y', value: number): number |
     if (value < low - 1e-9 || value > high + 1e-9) continue;
     const span = b[axis] - a[axis];
     const t = Math.abs(span) < 1e-12 ? 0 : (value - a[axis]) / span;
-    return line.lengths[index - 1]! + Math.min(1, Math.max(0, t)) * (line.lengths[index]! - line.lengths[index - 1]!);
+    const reached = line.lengths[index - 1]! + Math.min(1, Math.max(0, t)) * (line.lengths[index]! - line.lengths[index - 1]!);
+    assert(liesAlong(line, reached), 'where the line reaches a value is on the line');
+    return reached;
   }
   return undefined;
 }
@@ -266,6 +282,7 @@ const WAY_STEP: Record<string, Point> = {
   left: { x: -1, y: 0 },
   right: { x: 1, y: 0 },
 };
+assert(WAYS.every((way) => WAY_STEP[way] !== undefined), 'every way has a step');
 
 /**
  * Every text on one line, placed. Texts placed along the line, by a box, or
@@ -302,9 +319,9 @@ export function placeLineTexts(edge: LayoutEdge, route: Route): PlacedText[] {
       return toWhole(fromEnd ? s : on.total - s);
     }
     if (place.straight) {
-      const box = text.target!;
+      const box = assertFound(text.target, 'a text placed by a box was given where that box is');
       const origin = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
-      const s = firstMeeting(on, origin, WAY_STEP[place.straight.way]!);
+      const s = firstMeeting(on, origin, assertFound(WAY_STEP[place.straight.way], 'every way has a step'));
       if (s === undefined) {
         throw new SourceError(
           `${about} is placed ${place.straight.written}, and a way ${place.straight.way} from there never meets this line${onLeg} — ` +
@@ -317,10 +334,10 @@ export function placeLineTexts(edge: LayoutEdge, route: Route): PlacedText[] {
     if (place.by && !place.onLine) {
       // Off the line by the box; it lands on the line where the line comes nearest, for ordering the rest.
       const gap = place.gap === undefined ? TEXT_GAP : gapPixels(place.gap, `${about}: gap:`, edge.line);
-      return distanceTo(whole, byBox(place.by.side, text.target!, gap, turned(text.width, text.height, angleOf(text, { x: 1, y: 0 }))));
+      return distanceTo(whole, byBox(place.by.side, assertFound(text.target, 'a text placed by a box was given where that box is'), gap, turned(text.width, text.height, angleOf(text, { x: 1, y: 0 }))));
     }
     if (place.by) {
-      const box = text.target!;
+      const box = assertFound(text.target, 'a text placed by a box was given where that box is');
       const gap = place.gap === undefined ? TEXT_GAP : gapPixels(place.gap, `${about}: gap:`, edge.line);
       const [axis, value] = reachFor(place.by.side, box, gap);
       const s = firstReaching(on, axis, value);
@@ -351,9 +368,10 @@ export function placeLineTexts(edge: LayoutEdge, route: Route): PlacedText[] {
     for (let at = 0; at < count; at += 1) landing[index + at] = low + ((high - low) * (at + 1)) / (count + 1);
     index = past;
   }
+  assert(landing.every((s) => s !== undefined), 'the texts with no place of their own are spread between those with one');
 
   return edge.texts.map((text, index) => {
-    const s = landing[index]!;
+    const s = assertFound(landing[index], 'every text has landed somewhere on the line');
     const place = text.place;
     const spot = spotAlong(whole, s);
     const angle = angleOf(text, headingAlong(whole, s));
