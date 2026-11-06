@@ -68,6 +68,7 @@ import {
   listTargets,
   nameTarget,
 } from './ast.js';
+import { assert, assertFound } from './assert.js';
 import { CHECK_DEFAULTS, CHECK_KINDS, setCheck } from './checks.js';
 import { SourceError } from './errors.js';
 import { STATEMENT_KEYWORDS } from './grammar.js';
@@ -135,6 +136,10 @@ export function parse(source: string, seen?: (statement: Gathered) => void, star
 
   const close = () => {
     if (open) {
+      assert(
+        open.lines[0]?.line === open.line && open.lines.every((one, index) => index === 0 || one.line > open!.lines[index - 1]!.line),
+        'a statement is gathered from its first line on, each line once and in order',
+      );
       seen?.({ line: open.line, lines: open.lines });
       statements.push(parseStatement(open.tokens, open.line, starts));
     }
@@ -145,7 +150,7 @@ export function parse(source: string, seen?: (statement: Gathered) => void, star
   const lines = source.split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
     const lineNumber = index + 1;
-    let line = lines[index]!;
+    let line = assertFound(lines[index], 'a line counted is one of the source\'s');
     if (line.trim() === '') {
       close();
       continue;
@@ -172,7 +177,7 @@ export function parse(source: string, seen?: (statement: Gathered) => void, star
       } catch (error) {
         if (!(error instanceof OpenString) || index + 1 >= lines.length) throw error;
         index += 1;
-        line += '\n' + lines[index]!;
+        line += '\n' + assertFound(lines[index], 'a string runs on only onto a line there is');
       }
     }
     if (tokens.length === 0) continue;
@@ -180,7 +185,7 @@ export function parse(source: string, seen?: (statement: Gathered) => void, star
     if (!continues) {
       open = { tokens: [...tokens], line: lineNumber, lines: [{ line: lineNumber, tokens }] };
     } else {
-      const first = tokens[0]!;
+      const first = assertFound(tokens[0], 'a line with tokens has a first');
       if (!open) {
         throw new SourceError(
           indented
@@ -386,15 +391,19 @@ function parseTail(
     const token = tokens[i]!;
     starts?.add(token);
     if (isAttrKey(token)) {
-      i = readAttr(tokens, i, attrs, line, subject, starts);
+      const next = readAttr(tokens, i, attrs, line, subject, starts);
+      assert(next > i, 'an attribute takes its key and more, so the tail is read to its end');
+      i = next;
       continue;
     }
     const taken = other?.(tokens, i);
     if (taken !== undefined) {
+      assert(taken > i, 'a clause of its own takes at least its first word');
       i = taken;
       continue;
     }
     const read = readPlacement(tokens, i, line, subject, starts);
+    assert(read.next > i, 'a placement takes at least its first word');
     placements.push(read.placement);
     i = read.next;
   }
@@ -1492,10 +1501,11 @@ function readLimit(tokens: Token[], at: number, line: number, subject: string, s
       line,
     );
   }
+  assert(read.next > at + 1, '"stays" takes its word and a placement');
   return {
     limit: {
       way: way.text as Limit['way'],
-      target: placement.targets[0]!,
+      target: assertFound(placement.targets[0], 'a limit has its one target'),
       ...(placement.gap !== undefined ? { gap: placement.gap } : {}),
       line,
     },
@@ -2486,6 +2496,7 @@ function readPlacement(
         line,
       );
     }
+    assert(read.targets.length > 0 && modifiers.next >= read.next && read.next > from + 1, 'an alignment takes its words, one target or more and its bracket');
     return {
       placement: {
         kind: 'align',
@@ -2544,6 +2555,7 @@ function readPlacement(
     `${word.text}${of ? ' of' : ''} ${listTargets(read.targets)}`,
     line,
   );
+  assert(read.targets.length > 0 && modifiers.next >= read.next && read.next > next, 'a direction takes its words, one target or more and its bracket');
   return {
     placement: {
       kind: 'offset',
@@ -2641,7 +2653,7 @@ function readOn(
   subject: string,
 ): { placement: Placement; next: number } {
   const read = readTargets(tokens, at + 1, subject, 'on', line, true);
-  const target = read.targets[0]!;
+  const target = assertFound(read.targets[0], 'a list of targets read has a first');
   refuseSpan(target, subject, line);
   if (read.targets.length > 1) {
     throw new SourceError(
@@ -2671,6 +2683,7 @@ function readOn(
       line,
     );
   }
+  assert(modifiers.next >= read.next && read.next > at + 1, '"on" takes its word, its target and its bracket');
   return {
     placement: { kind: 'on', targets: read.targets, line },
     next: modifiers.next,
@@ -2695,7 +2708,7 @@ function readTucked(
   written: 'inside' | 'outside',
 ): { placement: Placement; next: number } {
   const read = readTargets(tokens, at + 1, subject, written, line, true);
-  const target = read.targets[0]!;
+  const target = assertFound(read.targets[0], 'a list of targets read has a first');
   refuseSpan(target, subject, line);
   if (read.targets.length > 1) {
     throw new SourceError(
@@ -2718,6 +2731,7 @@ function readTucked(
     );
   }
   const modifiers = readModifiers(tokens, read.next, subject, `${written} ${nameTarget(target)}`, line);
+  assert(modifiers.next >= read.next && read.next > at + 1, `"${written}" takes its word, its target and its bracket`);
   return {
     placement: {
       kind: 'offset',
@@ -2817,6 +2831,7 @@ function readBracket(
     i += 2;
   }
 
+  assert(i > start && Object.keys(values).every((key) => keys.includes(key)), 'a bracket read takes its brackets and holds only the keys it takes');
   return { values, next: i + 1 };
 }
 
@@ -2931,6 +2946,7 @@ function readTargets(
       throw new SourceError(`${subject}: "${placement}" names no node`, line);
     }
     const read = readOneTarget(tokens, i, subject, line, partFirst);
+    assert(read.next > i, 'a target takes at least its name');
     targets.push(read.target);
     i = read.next;
 
@@ -2940,6 +2956,7 @@ function readTargets(
     }
     comma = read.listed ? nameTarget(read.target) : undefined;
     if (read.listed) continue;
+    assert(targets.length > 0 && i > start, 'a list of targets takes one or more');
     return { targets, next: i };
   }
 }
@@ -2985,6 +3002,7 @@ function readOneTarget(
       next += 2;
     }
     refuseFractionPart(tokens, next, fraction, name, subject, line);
+    assert(next > first.next, 'a fraction written first takes the name after it');
     return { target: { name, fraction }, next, listed };
   }
 
@@ -3018,6 +3036,7 @@ function readOneTarget(
       throw new SourceError(`${subject}: a point is moved once — add the distances, as in \`${word} ${direction} …\``, line);
     }
     const point: PointExpr = { kind: 'moved', distance: word, direction, from: inner.target };
+    assert(inner.next > next, 'a moved point takes the point it moves');
     return { target: { name: describePoint(point), point }, next: inner.next, listed: inner.listed };
   }
 
@@ -3050,6 +3069,7 @@ function readOneTarget(
     listed = fraction.written.endsWith(',');
     if (listed) fraction.written = fraction.written.slice(0, -1);
     if (part !== undefined) checkFractionOnPart(fraction, name, part, subject, line);
+    assert(i > at + 1, 'a name with a fraction along it takes both');
     return { target: { ...target, fraction }, next: i, listed };
   }
   // `c bottom + 2` adds a length to a point, which doesn't say which way.
@@ -3128,10 +3148,11 @@ function readVia(tokens: Token[], start: number, subject: string, line: number):
   const after = tokens[i];
   if (after && !isAttrKey(after)) {
     throw new SourceError(
-      `${subject}: the stops in via: are separated by commas — "${after.joined ?? after.text}" follows "${describeEntry(entries[entries.length - 1]!)}" with none`,
+      `${subject}: the stops in via: are separated by commas — "${after.joined ?? after.text}" follows "${describeEntry(assertFound(entries[entries.length - 1], 'a via: list read has a stop'))}" with none`,
       line,
     );
   }
+  assert(entries.length > 0 && i > start, 'a via: list takes one stop or more');
   return { entries, next: i };
 }
 
@@ -3141,11 +3162,12 @@ function describeEntry(entry: ViaEntry): string {
 
 /** One stop in a `via:` list, and whether a comma after it promises another. */
 function readStop(tokens: Token[], start: number, subject: string, line: number): { stop: ViaStop; next: number; listed: boolean } {
-  const token = tokens[start]!;
+  const token = assertFound(tokens[start], 'a stop is read only where a word is');
   const word = token.text.replace(/,$/, '');
   const written = (from: number, to: number): string =>
     tokens.slice(from, to).map((t) => t.text).join(' ').replace(/,$/, '').replace(/ \( /g, ' (').replace(/ \)/g, ')');
   const finish = (stop: ViaStop, next: number, listed: boolean): { stop: ViaStop; next: number; listed: boolean } => {
+    assert(next > start, 'a stop takes at least its first word');
     if (!listed && follows(tokens, next, ',')) return { stop, next: next + 1, listed: true };
     return { stop, next, listed };
   };
@@ -3304,6 +3326,7 @@ function readFraction(tokens: Token[], at: number): { fraction: Fraction; next: 
       next += 2;
     }
   }
+  assert(next >= at + 2 && fraction.value >= 0 && fraction.value <= 1, 'a fraction read takes its number and its way, and is a share of the way');
   return { fraction, next };
 }
 
@@ -3393,6 +3416,7 @@ function readBetween(tokens: Token[], at: number, subject: string, line: number)
     point.span = 'both';
     next += 4;
   }
+  assert(b.next > a.next + 1 && a.next > at + 1 && next >= b.next, '"between" takes its word, both things and the "and" between them');
   return { target: { name: describePoint(point), point }, next, listed };
 }
 
@@ -3440,6 +3464,7 @@ function readCrossing(tokens: Token[], at: number, subject: string, line: number
       { way: second.way, target: second.target },
     ],
   };
+  assert(second.next > first.next + 1 && first.next > at, 'a crossing takes both halves and the "and" between them');
   return { target: { name: describePoint(point), point }, next: second.next, listed: second.listed };
 }
 
@@ -3467,6 +3492,7 @@ function readWay(
       line,
     );
   }
+  assert(read.next > at + 2, 'a half of a crossing takes its two words and its thing');
   return { way, target: read.target, next: read.next, listed: read.listed };
 }
 
