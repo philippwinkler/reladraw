@@ -14,6 +14,7 @@
  */
 import { GAPS } from './constants.js';
 import { EDGE_ORDER_KEYS, PART_SIDES, WAYS, isPosition, type Position, type ViaStop, type Way as WayWord } from './ast.js';
+import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 import type { Attrs } from './ast.js';
 import type { Layout, LayoutEdge, LayoutNode, Rect } from './model.js';
@@ -136,7 +137,7 @@ export function planSides(layout: Layout): { routes: Map<LayoutEdge, Route>; sid
   // where their lanes meet the boxes, so they take no slot on a side.
   const direct = directSets(layout.edges, ends, copies);
   for (const edge of direct.keys()) {
-    for (const end of ends.get(edge)!) {
+    for (const end of assertFound(ends.get(edge), 'every line has its two ends read')) {
       end.spec = { kind: 'free' };
       end.headings = [];
     }
@@ -211,14 +212,16 @@ export function planSides(layout: Layout): { routes: Map<LayoutEdge, Route>; sid
     if (group) {
       let drawn = directDrawn.get(group);
       if (!drawn) {
-        drawn = group.bundle && middles.has(group.bundle) ? laneRoutes(group, routes.get(group.bundle)!) : directRoutes(group);
+        drawn = group.bundle && middles.has(group.bundle)
+          ? laneRoutes(group, assertFound(routes.get(group.bundle), 'a bundle routed between two boxes is drawn before its lanes'))
+          : directRoutes(group);
         directDrawn.set(group, drawn);
       }
-      routes.set(edge, drawn.get(edge)!);
+      routes.set(edge, assertFound(drawn.get(edge), 'a direct set draws each of its members'));
       done.add(edge);
       return;
     }
-    const [start, end] = ends.get(edge)!;
+    const [start, end] = assertFound(ends.get(edge), 'every line has its two ends read');
     for (const one of [start, end]) placeEnd(one, context);
     for (const [own, other] of [[start, end], [end, start]] as [End, End][]) faceThePoint(own, other);
     for (const [own, other] of [[start, end], [end, start]] as [End, End][]) aimCenter(own, other);
@@ -234,8 +237,9 @@ export function planSides(layout: Layout): { routes: Map<LayoutEdge, Route>; sid
     if (set) draw(set.lines[0]!);
     draw(edge);
   }
+  assert(working.length === 0 && done.size === new Set(layout.edges).size, 'every line is drawn, once, and nothing is left half drawn');
   // Back in the order written, which is the order lines are drawn and cross.
-  return { routes: new Map(layout.edges.map((edge) => [edge, routes.get(edge)!])), sides };
+  return { routes: new Map(layout.edges.map((edge) => [edge, assertFound(routes.get(edge), 'every line drawn has its route')])), sides };
 }
 
 interface Context {
@@ -284,7 +288,7 @@ function copySets(edges: LayoutEdge[], ends: Map<LayoutEdge, [End, End]>): Map<L
   for (const edge of edges) {
     if (edge.via !== undefined || edge.straight !== undefined) continue;
     if (edge.look.stepOutWritten !== undefined || edge.look.turnWritten !== undefined) continue;
-    const [start, end] = ends.get(edge)!;
+    const [start, end] = assertFound(ends.get(edge), 'every line has its two ends read');
     if (!plain(start) || !plain(end)) continue;
     const [a, b] = [keyOf(start), keyOf(end)];
     const key = a <= b ? `${a}\n${b}` : `${b}\n${a}`;
@@ -295,10 +299,10 @@ function copySets(edges: LayoutEdge[], ends: Map<LayoutEdge, [End, End]>): Map<L
   const found = new Map<LayoutEdge, CopySet>();
   for (const set of filed.values()) {
     if (set.lines.length < 2) continue;
-    const [first] = ends.get(set.lines[0]!)!;
+    const [first] = assertFound(ends.get(set.lines[0]!), 'every line has its two ends read');
     set.lines.forEach((edge, k) => {
       found.set(edge, set);
-      const [start, end] = ends.get(edge)!;
+      const [start, end] = assertFound(ends.get(edge), 'every line has its two ends read');
       // Written the same way round as the first copy, or the other way.
       const along = keyOf(start) === keyOf(first);
       // Copy k is k steps to the left of the way the set travels: leaving a
@@ -326,8 +330,9 @@ function fanned(edge: LayoutEdge, start: End, end: End, set: CopySet, context: C
   const shape = context.shapes.get(set.lines[0]!);
   if (shape === undefined) return undefined;
   const k = set.lines.indexOf(edge);
+  assert(k > 0, 'a copy shifted from the first copy is one of the others in its set');
   // Worked out in the way the set travels, then turned round for a copy written the other way.
-  const along = start.copy!.leading;
+  const along = assertFound(start.copy, 'both ends of a copy know their place in its set').leading;
   const [a, b] = along ? [start.at!, end.at!] : [end.at!, start.at!];
   const moved = shiftShape(shape, a, b, k * FAN_STEP);
   if (moved === undefined) return undefined;
@@ -379,6 +384,7 @@ function shiftShape(shape: Shape, a: Point, b: Point, by: number): { square: Poi
     level[index] ? { x: across[index + 1]!, y: value } : { x: value, y: across[index + 1]! },
   );
   const square = [a, ...corners, b];
+  assert(square.length === base.length, 'a shifted shape keeps its corners, one for one');
   const move = (point: Point): Point => {
     for (let index = 0; index < count; index += 1) {
       const p = base[index]!;
@@ -425,8 +431,8 @@ function directSets(edges: LayoutEdge[], ends: Map<LayoutEdge, [End, End]>, copi
     const entries = edge.via ?? [];
     const stop = entries.map((entry) => entry.stop).find((one) => one?.kind === 'bundle' && bundles.has(one.bundle)) as Extract<ViaStop, { kind: 'bundle' }> | undefined;
     if (!stop) continue;
-    const bundle = bundles.get(stop.bundle)!;
-    const [a, b] = bundle.bundle!.between!;
+    const bundle = assertFound(bundles.get(stop.bundle), 'the stop found names a bundle between two boxes');
+    const [a, b] = assertFound(bundle.bundle?.between, 'a bundle filed as between two boxes has them');
     const subject = `edge ${describeEdge(edge)}`;
     if (!((edge.from === a && edge.to === b) || (edge.from === b && edge.to === a))) {
       throw new SourceError(
@@ -484,7 +490,7 @@ function directSets(edges: LayoutEdge[], ends: Map<LayoutEdge, [End, End]>, copi
   for (const set of copies.values()) {
     if (seen.has(set)) continue;
     seen.add(set);
-    const plain = set.lines.every((edge) => edge.look.path === 'straight' && ends.get(edge)!.every((end) => end.spec.kind === 'side' && end.spec.implied));
+    const plain = set.lines.every((edge) => edge.look.path === 'straight' && assertFound(ends.get(edge), 'every line has its two ends read').every((end) => end.spec.kind === 'side' && end.spec.implied));
     if (!plain) continue;
     const first = set.lines[0]!;
     const group: DirectSet = { a: first.from, b: first.to, members: set.lines, arrangement: 'parallel', gap: GAPS['tight']! };
@@ -528,6 +534,7 @@ function directRoutes(set: DirectSet): Map<LayoutEdge, Route> {
   // Parallel lines keep one spacing all the way, the tighter box's.
   const parallelScale = Math.min(sa, sb);
   const across = (point: Point): number => (point.x - ca.x) * p.x + (point.y - ca.y) * p.y;
+  assert(n > 0 && set.members.every((edge) => (edge.from === set.a && edge.to === set.b) || (edge.from === set.b && edge.to === set.a)), 'a direct set\'s lines all run between its two boxes');
   const routes = new Map<LayoutEdge, Route>();
   set.members.forEach((edge, k) => {
     const ea = lane(k) * (fanned ? sa : parallelScale);
@@ -564,6 +571,7 @@ function directRoutes(set: DirectSet): Map<LayoutEdge, Route> {
  */
 function laneRoutes(set: DirectSet, middle: Route): Map<LayoutEdge, Route> {
   const trace = tidyCorners(traceRoute(middle));
+  assert(trace.length >= 2, 'a bundle routed between two boxes has length to lay lanes along');
   const fa = faceOfNode(set.a);
   const fb = faceOfNode(set.b);
   const first = unit(trace[0]!, trace[1]!);
@@ -584,6 +592,7 @@ function laneRoutes(set: DirectSet, middle: Route): Map<LayoutEdge, Route> {
   const routes = new Map<LayoutEdge, Route>();
   set.members.forEach((edge, k) => {
     const lane = offsetLine(trace, (k - (n - 1) / 2) * gap * sign);
+    assert(lane.length === trace.length, 'a lane has a point for each of its bundle\'s');
     const last = lane.length - 1;
     lane[0] = meetOutline(fa, lane[0]!, unit(lane[0]!, lane[1]!));
     lane[last] = meetOutline(fb, lane[last]!, unit(lane[last - 1]!, lane[last]!));
@@ -671,7 +680,7 @@ function needs(edge: LayoutEdge, context: Context): LayoutEdge[] {
   const named = (name: string | undefined): LayoutEdge | undefined =>
     name === undefined ? undefined : (context.lines.get(name) ?? context.legs.get(name));
   const found: LayoutEdge[] = [];
-  for (const end of context.ends.get(edge)!) {
+  for (const end of assertFound(context.ends.get(edge), 'every line has its two ends read')) {
     if (end.onLine) found.push(end.onLine);
     if (end.spec.kind === 'online') {
       const line = named(end.spec.line);
@@ -681,7 +690,7 @@ function needs(edge: LayoutEdge, context: Context): LayoutEdge[] {
   }
   for (const entry of edge.via ?? []) {
     const stop = entry.stop;
-    if (stop?.kind === 'bundle') found.push(context.lines.get(stop.bundle)!);
+    if (stop?.kind === 'bundle') found.push(assertFound(context.lines.get(stop.bundle), 'a bundle stop names a line the resolver found'));
     if (stop?.kind === 'online') {
       const line = named(stop.line);
       if (line) found.push(line);
@@ -1045,7 +1054,7 @@ function placeEnd(end: End, context: Context): void {
         end.edge.line,
       );
     }
-    const [lineStart, lineEnd] = context.ends.get(line)!;
+    const [lineStart, lineEnd] = assertFound(context.ends.get(line), 'every line has its two ends read');
     const target = spec.at === 'start' ? lineStart : lineEnd;
     if (target.node !== end.node) {
       throw new SourceError(
@@ -1064,17 +1073,17 @@ function placeEnd(end: End, context: Context): void {
     if (from === undefined && fromLine === undefined) {
       throw new SourceError(`${subject}: "${end.which}: ${spec.written}" names ${spec.name}, which does not exist`, end.edge.line);
     }
-    const start = spec.fromStart ? context.ends.get(end.edge)![0].at : undefined;
+    const start = spec.fromStart ? assertFound(context.ends.get(end.edge), 'every line has its two ends read')[0].at : undefined;
     const origin = start
-      ?? (from ? centerOf('body' in from ? faceOfNode(from) : { ...from, round: false }) : alongLength(traceRoute(context.routes.get(fromLine!)!), 1 / 2));
+      ?? (from ? centerOf('body' in from ? faceOfNode(from) : { ...from, round: false }) : alongLength(traceRoute(drawnFirst(fromLine, context)), 1 / 2));
     const way = WAY_VECTOR[spec.way];
     if (end.onLine) {
-      const hit = rayHit(origin, way, traceRoute(context.routes.get(end.onLine)!));
+      const hit = rayHit(origin, way, traceRoute(drawnFirst(end.onLine, context)));
       if (hit === undefined) {
         throw new SourceError(`${subject}: the line straight ${spec.way} from ${spec.name} never meets ${end.onLine.name} — nothing is bent to reach it`, end.edge.line);
       }
       end.at = hit;
-      standOnLine(end, traceRoute(context.routes.get(end.onLine)!));
+      standOnLine(end, traceRoute(drawnFirst(end.onLine, context)));
       return;
     }
     const side = MET_SIDE[spec.way];
@@ -1098,7 +1107,8 @@ function placeEnd(end: End, context: Context): void {
 
 /** A line ending on another line heads square off it, toward its own far end. */
 function standOnLine(end: End, trace: Point[]): void {
-  const at = end.at!;
+  const at = assertFound(end.at, 'an end stands on a line once its point there is found');
+  assert(end.onLine !== undefined && trace.length > 0, 'only an end on a line stands on one, and the line is drawn');
   end.face = { x: at.x, y: at.y, width: 0, height: 0, round: false };
   end.node.x = at.x;
   end.node.y = at.y;
@@ -1116,7 +1126,7 @@ function standOnLine(end: End, trace: Point[]): void {
  */
 function faceThePoint(own: End, other: End): void {
   if (own.spec.kind !== 'facing-point') return;
-  const point = other.at!;
+  const point = assertFound(other.at, 'the far end on a line is placed before the end that faces it');
   const spec = facingSpec(own.edge, own.which, own.node, {
     ...own.far,
     x: point.x,
@@ -1142,14 +1152,20 @@ function aimCenter(own: End, other: End): void {
 /** A named line's trace, or a named leg's. */
 function traceNamed(name: string, context: Context, subject: string, line: number): Point[] {
   const edge = context.lines.get(name);
-  if (edge) return traceRoute(context.routes.get(edge)!);
+  if (edge) return traceRoute(drawnFirst(edge, context));
   const owner = context.legs.get(name);
-  if (owner) return context.routes.get(owner)!.legs.get(name)!;
+  if (owner) return assertFound(drawnFirst(owner, context).legs.get(name), 'a line drawn has every leg its via: names');
   throw new SourceError(`${subject}: there is no line or leg named ${name}`, line);
+}
+
+/** A line another needs, already drawn: lines are drawn in the order `needs` asks. */
+function drawnFirst(edge: LayoutEdge | undefined, context: Context): Route {
+  return assertFound(context.routes.get(assertFound(edge, 'a line needed is named')), 'a line others need is drawn before them');
 }
 
 /** The point a share of the way along a polyline, bends included, or its start or end. */
 export function alongLength(trace: Point[], at: number | 'start' | 'end'): Point {
+  assert(trace.length > 0, 'a point along a line is on a line with a point');
   if (at === 'start') return trace[0]!;
   if (at === 'end') return trace[trace.length - 1]!;
   let total = 0;
@@ -1413,6 +1429,7 @@ function spreadSides(ends: End[], nodes: LayoutNode[]): SideEnds[] {
           left.edge.line,
         );
       }
+      assert(listed.length === ordered.length, 'an edge-order list, once checked, holds each end on the side once');
       ordered.splice(0, ordered.length, ...listed);
     }
     // `to: top, right of z`: an end that states its place sits just past the line it names,
@@ -1450,12 +1467,15 @@ function spreadSides(ends: End[], nodes: LayoutNode[]): SideEnds[] {
         looped.edge.line,
       );
     }
+    assert(chained.length === ordered.length && new Set(chained).size === chained.length, 'chaining the ends that state their place keeps each end once');
     ordered.splice(0, ordered.length, ...chained);
     // Pinned ends keep their slots in that order but take them in the order
     // they sit along the side, so the side is split from one end to the other
     // even where their far boxes tie (`to: left, even with cat1` from one box).
     const slots = ordered.flatMap((end, index) => (end.spec.kind === 'side' ? [] : [index]));
-    const pins = slots.map((index) => ordered[index]!).sort((a, b) => along(a.at!) - along(b.at!));
+    const pins = slots.map((index) => ordered[index]!);
+    assert(pins.every((end) => end.at !== undefined), 'an end pinned to a spot on a side has its point before the side is spread');
+    pins.sort((a, b) => along(a.at!) - along(b.at!));
     slots.forEach((index, k) => (ordered[index] = pins[k]!));
     const low = across ? face.x : face.y;
     const high = across ? face.x + face.width : face.y + face.height;
@@ -1477,6 +1497,7 @@ function spreadSides(ends: End[], nodes: LayoutNode[]): SideEnds[] {
       from = pinned;
     }
     place(high);
+    assert(ordered.every((end) => end.at !== undefined), 'every end on a spread side has landed');
     if (ordered.length > 1) {
       shared.push({
         node: group[0]!.node,
@@ -1545,7 +1566,7 @@ function route(edge: LayoutEdge, start: End, end: End, context: Context): Route 
     ? []
     : [
         {
-          at: start.at!,
+          at: assertFound(start.at, 'a line\'s start is placed before it is routed'),
           face: start.face,
           ...(start.headings.length === 1 ? { dir: start.headings[0]! } : {}),
           ...(start.headings.length > 1 ? { choices: start.headings } : {}),
@@ -1567,7 +1588,7 @@ function route(edge: LayoutEdge, start: End, end: End, context: Context): Route 
       pending = entry.leg;
       continue;
     }
-    const stop = entry.stop!;
+    const stop = assertFound(entry.stop, 'a via entry that is not a leg alone is a stop');
     const prev = ways.length > 0 ? ways[ways.length - 1]!.at : firstPrev(edge, index);
     const stopWays = stop.kind === 'bundle'
       ? alongBundle(edge, stop, prev, context, subject)
@@ -1575,8 +1596,9 @@ function route(edge: LayoutEdge, start: End, end: End, context: Context): Route 
     // A bundle's first stop is where it starts, so nothing leads into it.
     if (ways.length > 0) segments.push({ kind: 'stretch', ...(pending ? { leg: pending } : {}) });
     pending = undefined;
+    assert(stopWays.length > 0, 'every stop puts a point on the line');
     ways.push(stopWays[0]!);
-    const hidden = stop.kind === 'bundle' && context.lines.get(stop.bundle)!.bundle!.arrangement === 'collapsed';
+    const hidden = stop.kind === 'bundle' && assertFound(context.lines.get(stop.bundle)?.bundle, 'a bundle stop names a bundle').arrangement === 'collapsed';
     for (const next of stopWays.slice(1)) {
       segments.push({ kind: 'run', ...(entry.leg ? { leg: entry.leg } : {}), ...(hidden ? { hidden } : {}) });
       ways.push(next);
@@ -1593,13 +1615,14 @@ function route(edge: LayoutEdge, start: End, end: End, context: Context): Route 
   } else {
     segments.push({ kind: 'stretch', ...(pending ? { leg: pending } : {}) });
     ways.push({
-      at: end.at!,
+      at: assertFound(end.at, 'a line\'s end is placed before it is routed'),
       face: end.face,
       ...(end.headings.length === 1 ? { dir: back(end.headings[0]!) } : {}),
       ...(end.headings.length > 1 ? { choices: end.headings.map(back) } : {}),
     });
   }
 
+  assert(segments.length === ways.length - 1, 'one segment joins each pair of neighboring points');
   // A curved line passes a stop with no way of its own, such as a corner,
   // heading from the place before it toward the place after it (6.4), so a
   // set of stops that mirror each other draws a curve that does too.
@@ -1639,7 +1662,7 @@ function route(edge: LayoutEdge, start: End, end: End, context: Context): Route 
     if (best.length > 1) {
       refuseTie(edge, index === 0 ? start : end, best.map((option) => (index === 0 ? option.out : back(option.arrive))), fewest);
     }
-    const chosen = best[0]!;
+    const chosen = assertFound(best[0], 'a stretch has a way out and a way in to choose from');
     // A point with no way of its own is passed in the way the line arrives,
     // along an axis, which is what a square line needs (6.4).
     from.dir ??= chosen.out;
@@ -1657,6 +1680,7 @@ function route(edge: LayoutEdge, start: End, end: End, context: Context): Route 
     }
   }
 
+  assert(drawn.length === segments.length, 'every segment is drawn');
   // A turn: written on the line itself must place a leg somewhere; from a style or a default it lands where it can.
   if (edge.look.turnWritten !== undefined && unturned.length > 0 && unturned.every((why) => why !== undefined)) {
     const why = unturned.length === 1 && unturned[0] ? unturned[0] : 'no stretch of it has a leg between its stops';
@@ -1721,7 +1745,7 @@ function lanesOf(bundle: LayoutEdge, context: Context): Map<LayoutEdge, number> 
   const members = context.layout.edges.filter((edge) => (edge.via ?? []).some((entry) => entry.stop?.kind === 'bundle' && entry.stop.bundle === bundle.name));
   const placed = (edge: LayoutEdge) => (edge.via ?? []).map((entry) => entry.stop).find((stop) => stop?.kind === 'bundle' && stop.bundle === bundle.name) as Extract<ViaStop, { kind: 'bundle' }>;
   const named = new Map(members.filter((edge) => edge.name !== undefined).map((edge) => [edge.name!, edge]));
-  const info = bundle.bundle!;
+  const info = assertFound(bundle.bundle, 'lanes are worked out for a bundle');
   let ordered: LayoutEdge[];
   if (info.order) {
     // The bundle's list is its whole membership (design.org 6.6).
@@ -1747,7 +1771,7 @@ function lanesOf(bundle: LayoutEdge, context: Context): Map<LayoutEdge, number> 
         );
       }
     }
-    ordered = info.order.map((name) => named.get(name)!);
+    ordered = info.order.map((name) => assertFound(named.get(name), 'every name in a checked order: is a line through the bundle'));
   } else {
     ordered = [...members];
   }
@@ -1781,7 +1805,7 @@ function lanesOf(bundle: LayoutEdge, context: Context): Map<LayoutEdge, number> 
     ordered.splice(way === 'after' ? at + 1 : at, 0, member);
   }
   const lanes = new Map<LayoutEdge, number>();
-  const trace = traceRoute(context.routes.get(bundle)!);
+  const trace = traceRoute(drawnFirst(bundle, context));
   const first = unit(trace[0]!, trace[1]!);
   // Reading order across the start: down for a level start, rightward for an upright one.
   const reading = Math.abs(first.x) >= Math.abs(first.y) ? { x: 0, y: 1 } : { x: 1, y: 0 };
@@ -1798,12 +1822,12 @@ function lanesOf(bundle: LayoutEdge, context: Context): Map<LayoutEdge, number> 
  * at the end nearer where the line comes from (6.6).
  */
 function alongBundle(edge: LayoutEdge, stop: Extract<ViaStop, { kind: 'bundle' }>, prev: Point, context: Context, subject: string): Way[] {
-  const bundle = context.lines.get(stop.bundle)!;
-  if (edge.via!.filter((entry) => entry.stop?.kind === 'bundle' && entry.stop.bundle === stop.bundle).length > 1) {
+  const bundle = assertFound(context.lines.get(stop.bundle), 'a bundle stop names a line the resolver found');
+  if (assertFound(edge.via, 'a line along a bundle has a via: list').filter((entry) => entry.stop?.kind === 'bundle' && entry.stop.bundle === stop.bundle).length > 1) {
     throw new SourceError(`${subject}: passes through ${stop.bundle} twice, and a line has one lane in a bundle — use a second bundle`, edge.line);
   }
   const lane = lanesOf(bundle, context).get(edge)!;
-  const path = tidyCorners(traceRoute(context.routes.get(bundle)!));
+  const path = tidyCorners(traceRoute(drawnFirst(bundle, context)));
   const shifted = offsetLine(path, lane);
   const forward = distance(prev, shifted[0]!) <= distance(prev, shifted[shifted.length - 1]!);
   const ordered = forward ? shifted : [...shifted].reverse();
@@ -1820,6 +1844,7 @@ function alongBundle(edge: LayoutEdge, stop: Extract<ViaStop, { kind: 'bundle' }
  */
 function offsetLine(points: Point[], by: number): Point[] {
   if (by === 0) return points;
+  assert(points.length >= 2, 'a line moved sideways has a way it travels');
   const normals = points.slice(1).map((point, index) => {
     const along = unit(points[index]!, point);
     return { x: along.y * by, y: -along.x * by };
@@ -1886,7 +1911,7 @@ function expand(stop: ViaStop, at: Rect | undefined, prev: Point, context: Conte
         line,
       );
     }
-    const found = context.routes.get(owner)!.stops.filter((one) => one.written === stop.along);
+    const found = drawnFirst(owner, context).stops.filter((one) => one.written === stop.along);
     if (found.length !== 1) {
       throw new SourceError(
         found.length === 0
@@ -1898,7 +1923,7 @@ function expand(stop: ViaStop, at: Rect | undefined, prev: Point, context: Conte
     return [point(alongLength(found[0]!.points, 1 / 2))];
   }
   if (stop.kind === 'through') {
-    const box = at!;
+    const box = assertFound(at, 'the placer located every stop that names a placed thing');
     const middle = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     return stop.axis === 'horizontal'
       ? run({ x: box.x, y: middle.y }, { x: box.x + box.width, y: middle.y })
@@ -1939,6 +1964,7 @@ function expand(stop: ViaStop, at: Rect | undefined, prev: Point, context: Conte
   if (stop.gap !== undefined && stop.mode === 'on') {
     throw new SourceError(`${subject}: "via: ${stop.written}" — on is exactly on the side, so it takes no gap`, line);
   }
+  assert(at !== undefined, 'the placer located every stop that names a placed thing');
   if (part !== undefined && isSide(part) && target.fraction === undefined) {
     const normal = SIDE_NORMAL[part];
     const across = part === 'top' || part === 'bottom';
@@ -2187,6 +2213,7 @@ function tracePieces(start: Point, pieces: Piece[]): Point[] {
     }
     from = piece.to;
   }
+  assert(trace.length === 1 + pieces.reduce((count, piece) => count + ('c1' in piece ? 16 : 1), 0), 'a flattened line is its start, a point per straight piece and sixteen per curve');
   return trace;
 }
 
@@ -2197,6 +2224,7 @@ export function traceRoute(route: Route): Point[] {
 
 /** A line's pieces with those along a collapsed bundle left out, as the runs either side of each. */
 export function visibleRuns(route: Route): { start: Point; pieces: Route['pieces'] }[] {
+  assert((route.hidden ?? []).every(([first, past]) => first >= 0 && first < past && past <= route.pieces.length), 'a hidden stretch is a run of the line\'s own pieces');
   const runs: { start: Point; pieces: Route['pieces'] }[] = [];
   let run: { start: Point; pieces: Route['pieces'] } = { start: route.start, pieces: [] };
   route.pieces.forEach((piece, index) => {
@@ -2256,6 +2284,7 @@ function intersect(a: Point, b: Point, c: Point, d: Point): Point | undefined {
 
 /** An edge as written, its name first where it has one: `e2 b.1 -- b.2`, so two lines between the same boxes can be told apart. */
 export function describeEdge(edge: LayoutEdge): string {
+  assert(edge.bundle === undefined || edge.name !== undefined, 'a bundle always has a name');
   if (edge.bundle) return `bundle ${edge.name}`;
   const ends = `${edge.from.name} ${edge.arrow} ${edge.to.name}`;
   return edge.name === undefined ? ends : `${edge.name} ${ends}`;
