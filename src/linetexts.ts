@@ -15,7 +15,7 @@ import { WAYS, type TextSide } from './ast.js';
 import { arrowLength } from './constants.js';
 import { SourceError } from './errors.js';
 import type { LayoutEdge, LayoutEdgeText } from './model.js';
-import { gapPixels } from './place.js';
+import { gapPixels } from './values.js';
 import { traceRoute, type Point, type Route } from './lines.js';
 
 /**

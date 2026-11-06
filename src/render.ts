@@ -6,7 +6,6 @@ import {
   LINE_WIDTH,
   PAD,
   arrowLength,
-  fontSizeFor,
   textStyleFor,
   widestLine,
 } from './constants.js';
@@ -22,6 +21,7 @@ import { crossingPoints, traceRoute, visibleRuns, type Point, type Route } from 
 import { patchPadding, type PlacedText } from './linetexts.js';
 import type { Picture } from './picture.js';
 import { plain, type Line, type Run } from './text.js';
+import { fontSizeFor } from './values.js';
 
 export interface RenderOptions {
   measurer?: Measurer;

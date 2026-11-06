@@ -12,13 +12,12 @@
  * The renderer draws what this returns and the findings measure it, so the two
  * can't disagree about where a line is.
  */
-import { GAPS } from './constants.js';
+import { GAPS, gapPixels } from './values.js';
 import { EDGE_ORDER_KEYS, PART_SIDES, WAYS, isPosition, type Position, type ViaStop, type Way as WayWord } from './ast.js';
 import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 import type { Attrs } from './ast.js';
 import type { Layout, LayoutEdge, LayoutNode, Rect } from './model.js';
-import { gapPixels } from './place.js';
 import { isBoxy, isRound, lineCrossings, middleOf, rayExit, shapeOf, sideOfPoint, sideStretch, towardOutline } from './outline.js';
 
 export interface Point {

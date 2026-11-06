@@ -23,7 +23,6 @@ import {
 import {
   DEFAULT_FONT_SIZE,
   DEFAULT_MARGIN,
-  GAPS,
   ICON_GAP,
   ICON_LINES,
   LINE_WIDTH,
@@ -31,7 +30,6 @@ import {
   THICKNESS,
   BORDER_THICKNESS,
   BORDER_WIDTH,
-  fontSizeFor,
   widestLine,
 } from './constants.js';
 import { SourceError } from './errors.js';
@@ -41,7 +39,8 @@ import { monospaceMeasurer, type Measurer } from './measure.js';
 import { isBoxy, middleOf, sizeFor, SUBPROCESS_INSET } from './outline.js';
 import { markupStyles, parseMarkup, plain, splitRuns, wrapLine, type Line } from './text.js';
 import { joinedToText, outlineStated, type DepthStatement, type Layout, type LayoutMark, type LayoutEdge, type LayoutNode, type LineLook, type Rect } from './model.js';
-import { checkOpacity, gapPixels, Placer, regionTextAt, type Layout as ChildLayout, type NodeFacts, type RegionTextFacts, type TitlePlace, type Venn } from './place.js';
+import { Placer, regionTextAt, type Layout as ChildLayout, type NodeFacts, type RegionTextFacts, type TitlePlace, type Venn } from './place.js';
+import { checkOpacity, fontSizeFor, GAPS, gapPixels } from './values.js';
 
 /**
  * What a node's own contents make of it, before anything is placed: a leaf's

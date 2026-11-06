@@ -18,7 +18,7 @@
  */
 
 import { assert } from './assert.js';
-import { UNIT } from './constants.js';
+import { UNIT } from './values.js';
 import { SourceError } from './errors.js';
 
 /** A point, relative to whatever the caller says. */

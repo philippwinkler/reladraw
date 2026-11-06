@@ -9,7 +9,8 @@
  */
 import { assert, assertFound } from './assert.js';
 import { isWithin, joinedToText, type Layout, type LayoutEdge, type LayoutNode } from './model.js';
-import { ARROW_MARKER_WIDTH, LINE_WIDTH, UNIT, arrowLength } from './constants.js';
+import { ARROW_MARKER_WIDTH, LINE_WIDTH, arrowLength } from './constants.js';
+import { UNIT } from './values.js';
 import { centerOf, crossingPoints, describeEdge, faceOfNode, traceRoute, traceVisible, type Face, type Point, type SideEnds } from './lines.js';
 import { clearOf, insideOutline,sizeFor } from './outline.js';
 import type { PlacedText } from './linetexts.js';

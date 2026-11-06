@@ -1,6 +1,7 @@
 export * from './ast.js';
 export * from './checks.js';
 export * from './constants.js';
+export { fontSizeFor, GAPS, TEXT_SIZES, UNIT } from './values.js';
 export * from './errors.js';
 export * from './grammar.js';
 export * from './measure.js';

@@ -20,12 +20,13 @@
  */
 import type { Axis, Direction, Limit, OffsetPlacement, Part, Placement, PlacementTarget, PointExpr, PointStmt, RegionStmt, Side } from './ast.js';
 import { describeLimit, describePlacement, describePoint, fractionAxis, nameTarget, PART_SIDES, partWordHint } from './ast.js';
-import { DECK_STEP, GAPS, HEADER_GAP, UNIT } from './constants.js';
+import { DECK_STEP, HEADER_GAP } from './constants.js';
 import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 import { isWithin, joinedToText, type LayoutNode } from './model.js';
 import { isBoxy, middleOf, shapeOf, towardOutline } from './outline.js';
 import { type Dimension, SIZE_KEYS, type SizeExpr, type SpanSide, storedSize } from './size.js';
+import { GAPS, gapPixels, UNIT } from './values.js';
 
 /** A stretch of one axis. */
 interface Extent {
@@ -166,42 +167,6 @@ function component(direction: Direction, axis: Axis): 'after' | 'before' | undef
 type Statement =
   | { kind: 'after' | 'before'; placement: Placement; edge: () => number }
   | { kind: 'align'; placement: Placement; side: 'start' | 'center' | 'end'; at: () => Extent };
-
-/**
- * A gap as written: a gap word, a number in the file's unit, or a number of
- * pixels with `px`. A distance is never negative; the words for an overlap are
- * `inside` and `on`.
- */
-export function gapPixels(written: string, subject: string, line: number): number {
-  const word = GAPS[written];
-  if (word !== undefined) return word;
-  if (/^\d*\.?\d+$/.test(written)) return Number(written) * UNIT;
-  const pixels = /^(\d*\.?\d+)px$/.exec(written);
-  if (pixels) return Number(pixels[1]);
-  if (written.startsWith('-')) {
-    throw new SourceError(
-      `${subject}: a distance is never negative, so ${written} is not one — to overlap, place it inside or on the other`,
-      line,
-    );
-  }
-  throw new SourceError(
-    `${subject}: "${written}" is not a distance — write one of ${Object.keys(GAPS).join(', ')}, ` +
-      'a number in the file\'s unit, or a number of pixels such as 12px',
-    line,
-  );
-}
-
-/**
- * A region's `opacity:`, an amount from none to full: `0` to `1.0`. The one
- * look whose bare number is not a multiple of its normal (design.org 8.3).
- */
-export function checkOpacity(value: string, subject: string, line: number): void {
-  if (/^\d*\.?\d+$/.test(value) && Number(value) <= 1) return;
-  throw new SourceError(
-    `${subject}: "opacity: ${value}" — opacity is an amount from 0 (none) to 1.0 (solid), such as opacity: 0.5`,
-    line,
-  );
-}
 
 export class Placer {
   private readonly starts = new Map<string, number>();

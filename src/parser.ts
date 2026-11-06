@@ -74,7 +74,7 @@ import { SourceError } from './errors.js';
 import { STATEMENT_KEYWORDS } from './grammar.js';
 import { isAttrKey, nameMark, OpenString, tokenizeLine, type Token } from './lexer.js';
 import { SHAPE_SETTINGS } from './outline.js';
-import { checkOpacity } from './place.js';
+import { checkOpacity } from './values.js';
 
 /** The settings a shape's bracket takes as a word on its own: `cylinder (lying)`. */
 const SHAPE_FLAGS = [...new Set(Object.values(SHAPE_SETTINGS).flatMap((one) => Object.entries(one).filter(([, kind]) => kind === 'flag').map(([name]) => name)))];
