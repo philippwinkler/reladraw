@@ -27,6 +27,7 @@
  * them.
  */
 
+import { assert } from './assert.js';
 import { DEFAULT_TARGETS, DIRECTIONS, MARKS, PARTS, POINT_TEXT_SIDES, POSITIONS, SIDES } from './ast.js';
 
 /** What a span of source is, for coloring. */
@@ -133,6 +134,11 @@ export const RELATION_WORDS: string[] = [
   'edge',
   'level',
 ];
+assert(RELATION_WORDS.every((word) => word.length > 0), 'no relation word is empty, so the relation pattern never matches nothing');
+assert(
+  [...DECLARES_NAME, ...LEADS, 'edge'].every((keyword) => (STATEMENT_KEYWORDS as readonly string[]).includes(keyword)),
+  'every keyword the highlighter treats specially is a statement keyword',
+);
 
 /** Longest first, so `above-left` is not read as `above` followed by `-left`. */
 function alternation(words: readonly string[]): string {
@@ -250,6 +256,7 @@ export function highlightLine(line: string): Span[] {
   let depth = 0;
 
   const push = (kind: TokenKind, end: number) => {
+    assert(end > at && end <= line.length, 'a span takes a character of the line at least, so the line is read to its end');
     spans.push({ kind, start: at, end });
     at = end;
   };
@@ -353,6 +360,10 @@ export function highlightLine(line: string): Span[] {
     if (!matched) push('plain', at + 1);
   }
 
+  assert(
+    spans.every((span, index) => span.start === (index === 0 ? 0 : spans[index - 1]!.end)) && at === line.length,
+    'the spans cover the line end to end, in order, with no gap or overlap',
+  );
   return spans;
 }
 
@@ -372,6 +383,7 @@ function splitMarkup(text: string, from: number): Array<{ kind: TokenKind; end: 
     at = found.index + found[0].length;
   }
   if (at < text.length || parts.length === 0) parts.push({ kind: 'string', end: from + text.length });
+  assert(parts[parts.length - 1]?.end === from + text.length, 'a string\'s parts run to the end of the string');
   return parts;
 }
 
