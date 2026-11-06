@@ -1,3 +1,4 @@
+import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 import { DEFAULT_FORMAT, type FormatSettings } from './format-settings.js';
 import { isAttrKey, type Token } from './lexer.js';
@@ -112,6 +113,7 @@ function gatherItems(lines: string[], statements: Gathered[], starts: Set<Token>
     const lastEntry = tokenLines[tokenLines.length - 1]!;
     let last = lastEntry.line - 1 + newlinesIn(lastEntry.tokens);
     while (last + 1 < lines.length && /^[ \t]+\/\//.test(lines[last + 1]!)) last += 1;
+    assert(last >= index, 'a statement runs to its own first line at least, so the lines are read forward');
     const span = lines.slice(index, last + 1);
     index = last;
 
@@ -239,7 +241,8 @@ function orderCells(cells: Cell[], settings: FormatSettings): Cell[] {
     .sort((a, b) => rank(a.cell) - rank(b.cell) || a.at - b.at)
     .map(({ cell }) => cell);
   const ordered = [...opening, ...rest];
-  const line = (some: Cell[]) => some.map((cell) => cell.text).filter((text) => text !== '').join(' ');
+  assert(ordered.length === cells.length && cells.every((cell) => ordered.includes(cell)), 'reordering moves the clauses and keeps every one');
+  const line =(some: Cell[]) => some.map((cell) => cell.text).filter((text) => text !== '').join(' ');
   try {
     return sameMeaning(line(cells), line(ordered)) ? ordered : cells;
   } catch (error) {
@@ -269,6 +272,7 @@ function clauseRuns(tokens: { token: Token; line: string }[], starts: Set<Token>
     if (!token.quoted && token.text === '(') depth += 1;
     else if (!token.quoted && token.text === ')') depth -= 1;
   }
+  assert(runs.every((run) => run.length > 0) && runs.flat().length === tokens.length, 'the clauses hold every token once, and none is empty');
   return runs;
 }
 
@@ -341,6 +345,7 @@ function breakStatement(item: Extract<Item, { kind: 'statement' }>, settings: Fo
   if (settings['first-line'] === 'text') while (item.cells[firstEnd]?.quoted) firstEnd += 1;
   const rest = item.cells.slice(firstEnd).map((cell) => cell.text);
   if (rest.length === 0) return item;
+  assert(firstEnd > 0 && firstEnd + rest.length === item.cells.length, 'a statement breaks after its opening, keeping every clause');
   return {
     kind: 'broken',
     keyword: item.keyword,
@@ -370,6 +375,7 @@ function continuedLines(item: Extract<Item, { kind: 'broken' }>, indent: string,
     line = line === '' ? text : line + gap + text;
   }
   lines.push(indent + line);
+  assert(lines.map((one) => one.slice(indent.length)).join(gap) === item.rest.join(gap), 'wrapping keeps every clause, in order');
   return lines;
 }
 
@@ -419,7 +425,7 @@ function layOutItems(written: Item[], settings: FormatSettings): string[] {
     items.forEach((item, index) => {
       const cells = aligned(item);
       if (cells === undefined) return;
-      const id = group.get(index)!;
+      const id = assertFound(group.get(index), 'every statement is in a column group');
       const own = widths.get(id) ?? [];
       cells.forEach((cell, at) => (own[at] = Math.max(own[at] ?? 0, textWidth(cell.text))));
       widths.set(id, own);
@@ -427,7 +433,7 @@ function layOutItems(written: Item[], settings: FormatSettings): string[] {
   };
   // Each cell's text, and where on the line it starts.
   const placed = (cells: Cell[], id: number): { text: string; at: number }[] => {
-    const own = widths.get(id)!;
+    const own = assertFound(widths.get(id), 'every column group is measured before it is laid out');
     const result: { text: string; at: number }[] = [];
     let at = 0;
     cells.forEach((cell, index) => {
@@ -478,7 +484,7 @@ function layOutItems(written: Item[], settings: FormatSettings): string[] {
     let longest: { index: number; own: number; printed: number } | undefined;
     items.forEach((item, index) => {
       if (item.kind !== 'statement') return;
-      const printed = textWidth(lineOf(item.cells, group.get(index)!));
+      const printed = textWidth(lineOf(item.cells, assertFound(group.get(index), 'every statement is in a column group')));
       if (breakStatement(item, settings, printed) === item) return;
       const own = ownLength(item);
       if (longest === undefined || own > longest.own) longest = { index, own, printed };
@@ -488,7 +494,7 @@ function layOutItems(written: Item[], settings: FormatSettings): string[] {
 
   items.forEach((item, index) => {
     if (item.kind !== 'statement') return;
-    const id = group.get(index)!;
+    const id = assertFound(group.get(index), 'every statement is in a column group');
     commentAt.set(id, Math.max(commentAt.get(id) ?? 0, textWidth(lineOf(item.cells, id))));
   });
   // Where a broken statement's later lines start, measured on its first line
@@ -531,7 +537,7 @@ function layOutItems(written: Item[], settings: FormatSettings): string[] {
         out.push(...item.lines);
         return;
       case 'broken': {
-        const id = group.get(index)!;
+        const id = assertFound(group.get(index), 'every statement is in a column group');
         const lines = [lineOf(item.first, id), ...continuedLines(item, brokenIndent(item, id), settings, gap, gapWidth)];
         lines.forEach((line, at) => {
           const last = at === lines.length - 1;
@@ -549,11 +555,11 @@ function layOutItems(written: Item[], settings: FormatSettings): string[] {
         return;
       }
       case 'statement': {
-        const id = group.get(index)!;
+        const id = assertFound(group.get(index), 'every statement is in a column group');
         const text = lineOf(item.cells, id);
         if (item.comment === undefined) out.push(text);
         else if (settings['trailing-comments'] === 'shared-column') {
-          out.push(text + ' '.repeat(commentAt.get(id)! - textWidth(text) + gapWidth) + item.comment);
+          out.push(text + ' '.repeat(assertFound(commentAt.get(id), 'every group with a statement has a comment column') - textWidth(text) + gapWidth) + item.comment);
         } else out.push(text + gap + item.comment);
       }
     }
