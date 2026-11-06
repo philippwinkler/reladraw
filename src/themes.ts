@@ -14,6 +14,7 @@
  * surface, a container sits between the two, and the lines take one of its
  * accents.
  */
+import { assert } from './assert.js';
 export interface Theme {
   background: string;
   boxFill: string;
@@ -82,13 +83,20 @@ const REGION_TINT = 0.24;
 
 /** `amount` of `color` over `page`, both `#rrggbb`. */
 function mix(color: string, page: string, amount: number): string {
+  assert(amount >= 0 && amount <= 1, 'a mix is some part of the color over the page, from none to all of it');
   const channel = (hex: string, at: number) => parseInt(hex.slice(at, at + 2), 16);
   let out = '#';
   for (const at of [1, 3, 5]) {
     const value = Math.round(channel(page, at) + (channel(color, at) - channel(page, at)) * amount);
     out += value.toString(16).padStart(2, '0');
   }
+  assert(!(isHexColor(color) && isHexColor(page)) || /^#[0-9a-f]{6}$/.test(out), 'two #rrggbb colors mix to a third');
   return out;
+}
+
+/** Whether a color is written `#rrggbb`, the one form this file can mix or measure. */
+function isHexColor(color: string): boolean {
+  return /^#[0-9a-f]{6}$/i.test(color);
 }
 
 /**
@@ -114,6 +122,7 @@ const THEME_COLOR_OF: Readonly<Record<string, (theme: Theme) => string>> = {
 };
 
 export const THEME_COLORS: readonly string[] = Object.keys(THEME_COLOR_OF);
+assert(THEME_COLORS.every((name) => name.startsWith('theme-')), 'every color named from the theme begins theme-');
 
 /** A color as written, with a `theme-` word replaced by the theme's value. */
 export function themeColor(value: string, theme: Theme): string {
@@ -145,7 +154,9 @@ export function luminance(hex: string): number {
     const c = parseInt(hex.slice(at, at + 2), 16) / 255;
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   });
-  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  const lightness = 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  assert(!(lightness < 0) && !(lightness > 1 + 1e-12), 'a color is no darker than black and no lighter than white');
+  return lightness;
 }
 
 /**
@@ -389,3 +400,10 @@ export const THEMES: Readonly<Record<string, Theme>> = {
 export const DEFAULT_THEME = 'dark';
 
 export const THEME_NAMES: readonly string[] = Object.keys(THEMES);
+assert(THEMES[DEFAULT_THEME] === DARK_THEME, 'the theme a file gets when it names none is one of the named themes');
+assert(
+  Object.values(THEMES).every((theme) =>
+    Object.values(theme).every((part: string | Accent) => (typeof part === 'string' ? [part] : Object.values(part)).every(isHexColor)),
+  ),
+  'every named theme\'s colors are #rrggbb, so each can be mixed and measured',
+);
