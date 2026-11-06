@@ -11,7 +11,7 @@ import {
   widestLine,
 } from './constants.js';
 import type { Attrs, Mark, NodeCorners } from './ast.js';
-import { assertFound } from './assert.js';
+import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 import { ICON_STROKE, type Icon, type IconTone, type Outline } from './icons.js';
 import { insideOutline,isBoxy, isRound, placePath, shapeOf, SUBPROCESS_INSET, type ShapeLook } from './outline.js';
@@ -108,6 +108,7 @@ function drawing(picture: Picture, options: RenderOptions): (tagged: boolean) =>
   const keyOf = (edge: DrawnEdge): string => `edge ${edges.indexOf(edge.edge)}`;
   const sequence = order(boxes, marks, drawn.map((edge) => ({ key: keyOf(edge), svg: '' })), layout.depths);
   const place = new Map(sequence.map((item, index) => [item.key, index]));
+  assert(drawn.every((edge) => place.has(keyOf(edge))), 'the drawing order holds every line drawn');
   const inOrder = [...drawn].sort((a, b) => place.get(keyOf(a))! - place.get(keyOf(b))!);
   // `depth: in front of climb` on a line puts it on top only where it crosses the leg climb.
   const onLeg: LegDepth[] = layout.depths.flatMap((depth) =>
@@ -152,6 +153,8 @@ function drawing(picture: Picture, options: RenderOptions): (tagged: boolean) =>
     lines.push({ key: keyOf(edge), svg: linked(parts.join('\n'), edge.edge.attrs['url']) });
     ink = union(ink, grow(edge.ink, layout.margin));
   }
+  assert(masks.every(({ holes }) => holes.length > 0), 'a line is cut only where it crosses another');
+  assert(lines.length === drawn.length, 'every line drawn has its ink');
   const lineSvg = new Map(lines.map((line) => [line.key, line.svg]));
   const body = sequence
     .map((item) => ({ item, svg: lineSvg.get(item.key) ?? item.svg }))
@@ -237,7 +240,7 @@ function tag(layout: Layout, item: Drawn, svg: string): string {
   if (item.node) {
     ({ name, line } = item.node);
   } else if (item.key.startsWith('edge ')) {
-    const edge = layout.edges[Number(item.key.slice('edge '.length))]!;
+    const edge = assertFound(layout.edges[Number(item.key.slice('edge '.length))], 'a line\'s key names a line');
     name = edge.name ?? `${edge.from.name} ${edge.arrow} ${edge.to.name}`;
     line = edge.line;
   } else {
@@ -273,6 +276,7 @@ function ownIds(svg: string): string {
     hash = Math.imul(hash ^ svg.charCodeAt(i), 0x01000193);
   }
   const prefix = `r${(hash >>> 0).toString(16).padStart(8, '0')}-`;
+  assert(/^r[0-9a-f]{8}-$/.test(prefix), 'every drawing\'s ids take a prefix of one length and alphabet');
   return svg.replaceAll(' id="', ` id="${prefix}`).replaceAll('="url(#', `="url(#${prefix}`);
 }
 
@@ -368,7 +372,7 @@ function patchSvg(patch: Patch, beneath: Drawn[], theme: Theme): string {
     if (fill.opacity >= 1) base = index;
   });
   return [
-    `  <rect ${rect} fill="${base < 0 ? theme.background : under[base]!.color}"/>`,
+    `  <rect ${rect} fill="${base < 0 ? theme.background : assertFound(under[base], 'the opaque fill found is one of those under the text').color}"/>`,
     ...under.slice(base + 1).map((fill) => `  <rect ${rect} fill="${fill.color}" fill-opacity="${fill.opacity}"/>`),
   ].join('\n');
 }
@@ -478,7 +482,9 @@ function drawVenn(
   const plain = (part: LayoutNode, fill: string): LayoutNode => ({ ...part, appearance: { ...part.appearance, fill, border: 'none' } });
   const own = nodeSvg(plain(node, node.appearance['fill'] ?? 'none'), theme, measurer, fontSize, markup);
   if (node.appearance['border'] !== undefined) own.push(borderSvg(node, theme));
-  const [left, shared, right] = node.children.filter((child) => child !== node.heading && !joinedToText(child)) as [LayoutNode, LayoutNode, LayoutNode];
+  const parts = node.children.filter((child) => child !== node.heading && !joinedToText(child));
+  assert(parts.length === 3, 'a venn, once resolved, has exactly three parts');
+  const [left, shared, right] = parts as [LayoutNode, LayoutNode, LayoutNode];
   const leftFill = left.appearance['fill'] ?? 'theme-primary-subtle';
   const rightFill = right.appearance['fill'] ?? 'theme-secondary-subtle';
   const sharedFill = shared.appearance['fill'] ?? overlapFill(themeColor(leftFill, theme), theme);
@@ -846,6 +852,7 @@ function order(boxes: Drawn[], marks: { mark: LayoutMark; item: Drawn }[], lines
       }
     }
   }
+  assert(sequence.length === boxes.length + marks.length + lines.length, 'the drawing order holds everything drawn, once each');
   return sequence;
 }
 
@@ -943,6 +950,7 @@ function drawIcon(icon: Icon, x: number, y: number, side: number, theme: Theme):
       '  </svg>',
     ].join('\n');
   }
+  assert(icon.grid > 0, 'a drawn icon\'s own grid has a size');
   const scale = side / icon.grid;
   const color = (tone: IconTone | undefined): string =>
     tone === 'ink' ? theme.iconInk : tone === 'shade' ? theme.iconShade : theme.background;
@@ -1014,8 +1022,8 @@ function drawEdge(
     edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color, freeEnd(edge, 'from'))})"` : '';
 
   const points = route.points;
-  const start = points[0]!;
-  const end = points[points.length - 1]!;
+  const start = assertFound(points[0], 'a planned line has a first point');
+  const end = assertFound(points[points.length - 1], 'a planned line has a last point');
   const parts: string[] = [];
   // What the line actually covers, so the canvas can be sized to hold it. A
   // line stepping out of a `top` side rides above every box in the drawing,
@@ -1097,6 +1105,7 @@ function drawEdge(
   }
 
   // The stroke straddles the path, so half of it lies outside the geometry.
+  assert(parts.length === 1 && patches.length === texts.length, 'a line is drawn as one element, with a patch behind each of its texts');
   const [line] = parts;
   return {
     edge,
@@ -1130,6 +1139,7 @@ function strokeOf(color: string, look: LineLook): string {
 }
 
 function sharpPath(points: Point[]): string {
+  assert(points.length >= 2, 'a path runs between two points or more');
   return points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${round(point.x)} ${round(point.y)}`).join(' ');
 }
 
@@ -1204,7 +1214,7 @@ function tracesOf(element: string): Point[][] {
       return point;
     };
     if (command === 'C') {
-      const from = points[points.length - 1]!;
+      const from = assertFound(points[points.length - 1], 'a drawn curve starts where the path already is');
       const [c1, c2, to] = [read(), read(), read()];
       for (let step = 1; step <= 12; step += 1) {
         const t = step / 12;
@@ -1219,6 +1229,7 @@ function tracesOf(element: string): Point[][] {
     }
   }
   if (points.length > 0) parts.push(points);
+  assert(parts.every((part) => part.length > 0), 'each part read back from a drawn line has a point');
   return parts;
 }
 
@@ -1248,6 +1259,7 @@ interface LegDepth {
  * a box, not passing each other.
  */
 function findCrossings(drawn: DrawnEdge[], onLeg: LegDepth[]): Map<DrawnEdge, Crossing[]> {
+  assert(onLeg.every((one) => one.pair.includes(one.top) && one.pair.every((edge) => drawn.includes(edge))), 'a leg\'s depth turns over a pair of drawn lines, one of them on top');
   const found = new Map<DrawnEdge, Crossing[]>();
   drawn.forEach((later, index) => {
     for (const earlier of drawn.slice(0, index)) {
@@ -1273,8 +1285,8 @@ function findCrossings(drawn: DrawnEdge[], onLeg: LegDepth[]): Map<DrawnEdge, Cr
 /** Whether a point lies on a polyline. */
 function nearTrace(trace: Point[], at: Point): boolean {
   for (let index = 1; index < trace.length; index += 1) {
-    const a = trace[index - 1]!;
-    const b = trace[index]!;
+    const a = assertFound(trace[index - 1], 'a step of a trace starts on it');
+    const b = assertFound(trace[index], 'a step of a trace ends on it');
     const length = Math.hypot(b.x - a.x, b.y - a.y);
     if (length === 0) continue;
     const t = Math.max(0, Math.min(1, ((at.x - a.x) * (b.x - a.x) + (at.y - a.y) * (b.y - a.y)) / (length * length)));
@@ -1326,6 +1338,7 @@ function grow(extent: Extent, by: number): Extent {
 }
 
 function extentOfPoints(points: Point[]): Extent {
+  assert(points.length > 0, 'only something with a point has an extent');
   return {
     minX: Math.min(...points.map((p) => p.x)),
     minY: Math.min(...points.map((p) => p.y)),
@@ -1344,7 +1357,9 @@ const ROUTE_RADIUS = 20;
  * the head always lands on a straight piece.
  */
 function roundedPath(points: Point[], arrow: number = ARROW_LENGTH): string {
-  const parts = [`M ${round(points[0]!.x)} ${round(points[0]!.y)}`];
+  assert(points.length > 2, 'only a line with a corner has corners to round');
+  const first = assertFound(points[0], 'a rounded line has a first point');
+  const parts = [`M ${round(first.x)} ${round(first.y)}`];
   const kappa = 0.5523; // a cubic's handle, as a share of the radius, for a quarter circle
   for (let index = 1; index + 1 < points.length; index += 1) {
     const [before, corner, after] = [points[index - 1]!, points[index]!, points[index + 1]!];
@@ -1369,7 +1384,7 @@ function roundedPath(points: Point[], arrow: number = ARROW_LENGTH): string {
         `${round(leave.x)} ${round(leave.y)}`,
     );
   }
-  const last = points[points.length - 1]!;
+  const last = assertFound(points[points.length - 1], 'a rounded line has a last point');
   parts.push(`L ${round(last.x)} ${round(last.y)}`);
   return parts.join(' ');
 }
