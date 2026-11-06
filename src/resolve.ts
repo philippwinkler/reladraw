@@ -35,6 +35,7 @@ import {
   widestLine,
 } from './constants.js';
 import { SourceError } from './errors.js';
+import { assert, assertFound } from './assert.js';
 import { type Body, bodyFor, type Icon, pastedIcon } from './icons.js';
 import { monospaceMeasurer, type Measurer } from './measure.js';
 import { isBoxy, middleOf, sizeFor, SUBPROCESS_INSET } from './outline.js';
@@ -59,9 +60,11 @@ function factsFor(node: LayoutNode, measurer: Measurer, fontSize: number): NodeF
   const turned = node.textAttrs['reads'] !== undefined;
   const textWidth = turned ? tall : across;
   const textHeight = turned ? across : tall;
+  assert(hasText || (textWidth === 0 && textHeight === 0), 'a node with no text takes no room for one');
   const glyphSide = ICON_LINES * lineHeight;
   const title = titlePlaceOf(node);
   const layout = layoutOf(node);
+  assert(layout === undefined || layout.kind === 'deck' || (layout.gap === undefined) !== (layout.centers === undefined), 'a column or row is spaced by its gap or by its centers, one of the two');
   const venn = vennOf(node);
   const circle = isCircle(node);
   // A deck that draws no outline of its own is its cards, with nothing round them.
@@ -330,7 +333,7 @@ function vennOf(node: LayoutNode): Venn | undefined {
     );
   }
   for (const [index, part] of parts.entries()) {
-    const role = ['the left set', 'the overlap', 'the right set'][index]!;
+    const role = assertFound(['the left set', 'the overlap', 'the right set'][index], 'a venn has three parts, each with its role');
     if (part.children.length === 0) {
       throw new SourceError(
         `"${part.name}" is ${role} of venn "${node.name}" and holds nothing — put what belongs there inside it, such as node ${part.name}.a "A"`,
@@ -413,6 +416,7 @@ export function resolve(doc: Document, options: ResolveOptions = {}): Layout {
   const edges = buildEdges(statements, byName, named, styles, defaults, measurer, fontSize);
 
   const facts = new Map(nodes.map((node) => [node, factsFor(node, measurer, fontSize)]));
+  assert(facts.size === nodes.length, 'the tree pass settles the facts of every node, once');
   const markTexts = measureMarkTexts(named, measurer, fontSize);
   const regionTexts = new Map([...markTexts].flatMap(([name, text]) => (text.region ? [[name, text.region] as const] : [])));
   const placer = new Placer(roots, byName, facts, named, regionTexts);
@@ -429,6 +433,10 @@ export function resolve(doc: Document, options: ResolveOptions = {}): Layout {
   ]);
   standInForMarks(edges, marks);
 
+  assert(
+    edges.every((edge) => [edge.from, edge.to].every((end) => byName.get(end.name) === end || (end.kind === 'none' && end.children.length === 0))),
+    'a line ends on a box of the tree, or on a stand-in of no size for a point',
+  );
   const extent = bounds(nodes, marks);
   const look = (kind: 'node' | 'edge' | 'point' | 'region') => defaults.get(`guide ${kind}`) ?? {};
 
@@ -454,7 +462,7 @@ export function resolve(doc: Document, options: ResolveOptions = {}): Layout {
  * the box's label, so neither gets a line.
  */
 function expandEach(statements: Stmt[], byName: Map<string, LayoutNode>): Stmt[] {
-  return statements.flatMap((stmt) => {
+  const expanded = statements.flatMap((stmt) => {
     if (stmt.kind === 'edge' && stmt.several !== undefined) {
       // `edge a -> b, c, d`: one line to each, in the order written. A text is
       // drawn once, on the first, so a text by the shared end labels the group.
@@ -475,6 +483,11 @@ function expandEach(statements: Stmt[], byName: Map<string, LayoutNode>): Stmt[]
     const { each: _, ...one } = stmt;
     return children.map((child) => ({ ...one, [stmt.each!]: child.name }) as EdgeStmt);
   });
+  assert(
+    expanded.length >= statements.length && expanded.every((stmt) => stmt.kind !== 'edge' || stmt.several === undefined),
+    'a line to several ends, or from each child, is written out as one line or more each',
+  );
+  return expanded;
 }
 
 // --- named points and regions ------------------------------------------------
@@ -513,6 +526,7 @@ function namesIn(target: PlacementTarget, named: Map<string, PointStmt | RegionS
     const parts = stmt.kind === 'point' ? [stmt.point] : stmt.corners;
     for (const part of parts) found.push(...namesIn(part, named, seen));
   }
+  assert(new Set(found).size === found.length, 'each name a mark is worked out from is listed once');
   return found;
 }
 
@@ -561,6 +575,10 @@ function measureMarkTexts(named: Map<string, PointStmt | RegionStmt>, measurer: 
     const along = align === 'left' || align === 'top' ? 'start' : align === 'right' || align === 'bottom' ? 'end' : 'center';
     measured.set(name, { ...base, region: { width, height, gap, how, side, along } });
   }
+  assert(
+    [...measured].every(([name, text]) => (text.region !== undefined) === (named.get(name)?.kind === 'region')),
+    'a region\'s text, and only a region\'s, is measured for the room it takes',
+  );
   return measured;
 }
 
@@ -589,7 +607,7 @@ function buildMarks(
 ): LayoutMark[] {
   const marks: LayoutMark[] = [];
   for (const [name, stmt] of named) {
-    const at = placed.get(name)!;
+    const at = assertFound(placed.get(name), 'the placer places every named point and region');
     const appearance = appearanceOf(stmt.attrs, styles, stmt.line);
     const allowed: readonly string[] = stmt.kind === 'point' ? POINT_KEYS : REGION_KEYS;
     for (const key of Object.keys(appearance)) {
@@ -626,6 +644,7 @@ function buildMarks(
       line: stmt.line,
     });
   }
+  assert(marks.length === named.size, 'every named point and region is one mark');
   return marks;
 }
 
@@ -666,10 +685,10 @@ function collectDepths(
           names.push(name);
         } else if (lines.has(name)) {
           if (lines.get(name) === subject) throw new SourceError(`${said}: depth: ${way} "${name}", which is this line`, stmt.line);
-          names.push(lines.get(name)!);
+          names.push(assertFound(lines.get(name), 'a line name, once known, has its key'));
         } else if (legs.has(name)) {
           // A leg limits depth to where two lines cross on it, and only a line crosses one.
-          const line = legs.get(name)!;
+          const line = assertFound(legs.get(name), 'a leg name, once known, has its line\'s key');
           if (stmt.kind !== 'edge') {
             const owner = [...lines].find(([, key]) => key === line)?.[0];
             throw new SourceError(
@@ -688,6 +707,11 @@ function collectDepths(
     });
     depths.push({ subject, written: said, clauses, line: stmt.line });
   }
+  assert(
+    depths.every((depth) => byName.has(depth.subject) || named.has(depth.subject) || /^edge \d+$/.test(depth.subject)),
+    'a depth: moves a node, a mark or a line by its key',
+  );
+  assert(edge === count, 'both passes count the same lines, so a line\'s key is its place in the drawing order');
   return depths;
 }
 
@@ -702,6 +726,7 @@ function collectStyles(statements: Stmt[]): Map<string, Attrs> {
     }
     styles.set(stmt.name, stmt.attrs);
   }
+  assert(styles.size === statements.filter((stmt) => stmt.kind === 'style').length, 'every style is declared once and kept');
   return styles;
 }
 
@@ -731,6 +756,7 @@ function collectIcons(statements: Stmt[], readIconFile: ((path: string) => strin
     }
     icons.set(stmt.name, pastedIcon(svg, stmt.name, stmt.line));
   }
+  assert(icons.size === statements.filter((stmt) => stmt.kind === 'icon').length, 'every icon is declared once and read');
   return icons;
 }
 
@@ -773,7 +799,9 @@ function over(base: Attrs, top: Attrs): Attrs {
   const { shape: _shape, icon: _icon, ...rest } = base;
   // A shape's settings belong to the shape they were written with.
   for (const key of Object.keys(rest)) if (key.startsWith('shape.')) delete rest[key];
-  return { ...rest, ...top };
+  const laid = { ...rest, ...top };
+  assert(laid['shape'] === top['shape'] && laid['icon'] === top['icon'], 'the stronger bundle\'s body is the whole body');
+  return laid;
 }
 
 /** A file holds one diagram, so a second `diagram` statement is a mistake. */
@@ -995,7 +1023,7 @@ function buildTree(
   // A heading written by hand names one of the node's own children, declared
   // after it, which places nothing itself: it goes where the title would.
   for (const [name, child] of headings) {
-    const node = byName.get(name)!;
+    const node = assertFound(byName.get(name), 'a node with a heading is in the tree');
     const heading = byName.get(child);
     if (!heading || heading.parent !== node) {
       throw new SourceError(
@@ -1017,6 +1045,11 @@ function buildTree(
   }
   for (const node of nodes) joinBesideTitle(node);
 
+  assert(nodes.length === byName.size && nodes.every((node) => byName.get(node.name) === node), 'every node is known by its own name, once');
+  assert(
+    nodes.every((node) => (node.parent === undefined ? roots.includes(node) : node.parent.children.includes(node))),
+    'every node is a root or one of its container\'s children',
+  );
   return { nodes, byName, roots };
 }
 
@@ -1060,6 +1093,10 @@ function writeOutCards(statements: Stmt[]): Stmt[] {
       });
     });
   }
+  assert(
+    out.length === statements.length + statements.reduce((cards, stmt) => cards + (stmt.kind === 'node' && stmt.attrs['cards'] !== undefined ? stmt.attrs['cards'].split('\n').length : 0), 0),
+    'cards: writes out one child for each card, and nothing else changes',
+  );
   return out;
 }
 
@@ -1167,7 +1204,7 @@ function joinTarget(node: LayoutNode, written: string, byName: Map<string, Layou
       node.line,
     );
   }
-  return part === 'text' ? 'text' : byName.get(name)!;
+  return part === 'text' ? 'text' : assertFound(byName.get(name), 'a sibling joined to, once checked, exists');
 }
 
 /**
@@ -1336,6 +1373,7 @@ function checkAttrs(kind: Kind, name: string, attrs: Attrs, line: number): void 
       );
     }
 
+    assert(belongTo(key).length > 0, 'a word that is an attribute and is not the diagram\'s belongs to some kind');
     // Anything else names no part, so what the kind is made of explains
     // nothing. What does explain it is where the word *does* belong, which is
     // also the more useful thing to be told: the author has usually written a
@@ -1373,7 +1411,9 @@ export function borderWidthOf(what: string, value: string | undefined, line: num
       line,
     );
   }
-  return number[2] ? Number(number[1]) : BORDER_WIDTH * Number(number[1]);
+  const width = number[2] ? Number(number[1]) : BORDER_WIDTH * Number(number[1]);
+  assert(width > 0, 'a border, once read, has a thickness');
+  return width;
 }
 
 function cornersOf(node: LayoutNode, value: string | undefined, written: boolean): NodeCorners {
@@ -1529,7 +1569,9 @@ function appearanceOf(attrs: Attrs, styles: Map<string, Attrs>, line: number): A
     if (!base) throw new SourceError(`no style named "${named}"`, line);
     Object.assign(merged, base);
   }
-  return { ...merged, ...attrs };
+  const appearance = { ...merged, ...attrs };
+  assert(Object.entries(attrs).every(([key, value]) => appearance[key] === value), 'a word written on the statement beats every style it wears');
+  return appearance;
 }
 
 /**
@@ -1726,7 +1768,7 @@ function buildEdges(
       line: stmt.line,
     });
     pending.push({
-      edge: edges[edges.length - 1]!,
+      edge: assertFound(edges[edges.length - 1], 'the line just built is the last'),
       ...(onLines.has(stmt.from) && !byName.has(stmt.from) ? { from: stmt.from } : {}),
       ...(onLines.has(stmt.to) && !byName.has(stmt.to) ? { to: stmt.to } : {}),
     });
@@ -1740,10 +1782,11 @@ function buildEdges(
   for (const { edge, from, to } of pending) {
     if (from === undefined && to === undefined) continue;
     edge.onLine = {
-      ...(from !== undefined ? { from: byLine.get(from)! } : {}),
-      ...(to !== undefined ? { to: byLine.get(to)! } : {}),
+      ...(from !== undefined ? { from: assertFound(byLine.get(from), 'an end on a line names a line or a leg that is drawn') } : {}),
+      ...(to !== undefined ? { to: assertFound(byLine.get(to), 'an end on a line names a line or a leg that is drawn') } : {}),
     };
   }
+  assert(edges.length === statements.filter((stmt) => stmt.kind === 'edge' || stmt.kind === 'bundle').length, 'every edge and bundle is one line');
   return edges;
 }
 
@@ -1758,7 +1801,7 @@ function standInForMarks(edges: LayoutEdge[], marks: LayoutMark[]): void {
     for (const which of ['from', 'to'] as const) {
       if (edge.onMark?.[which] === undefined) continue;
       const node = edge[which];
-      const mark = byName.get(node.name)!;
+      const mark = assertFound(byName.get(node.name), 'an end at a named point or region has its mark');
       node.x = mark.x;
       node.y = mark.y;
       node.width = mark.width;
@@ -1876,7 +1919,7 @@ function locateEvenWith(edges: LayoutEdge[], placer: Placer, byName: Map<string,
 function locateStops(edges: LayoutEdge[], placer: Placer, byName: Map<string, LayoutNode>, named: Map<string, PointStmt | RegionStmt>): void {
   const lineNames = new Set(edges.map((edge) => edge.name).filter((name) => name !== undefined));
   const legNames = new Set(edges.flatMap((edge) => (edge.via ?? []).map((entry) => entry.leg?.name)).filter((name) => name !== undefined));
-  const bundles = new Set(edges.filter((edge) => edge.bundle).map((edge) => edge.name!));
+  const bundles = new Set(edges.filter((edge) => edge.bundle).map((edge) => assertFound(edge.name, 'a bundle has a name')));
   for (const edge of edges) {
     if (!edge.via) continue;
     const subject = edge.bundle ? `bundle ${edge.name}` : `edge ${edge.from.name} ${edge.arrow} ${edge.to.name}`;
@@ -1908,7 +1951,7 @@ function locateStops(edges: LayoutEdge[], placer: Placer, byName: Map<string, La
         );
       }
       if (stop.kind === 'through') {
-        if (!named.has(stop.region) || named.get(stop.region)!.kind !== 'region') {
+        if (!named.has(stop.region) || assertFound(named.get(stop.region), 'a known name has its statement').kind !== 'region') {
           throw new SourceError(
             `${subject}: "via: ${stop.written}" — ${stop.region} is not a region; name one with \`region ${stop.region}  …\``,
             edge.line,
@@ -1973,8 +2016,9 @@ function lineLook(written: Attrs, appearance: Attrs, what: string, line: number)
       }
       return number[2] ? Number(number[1]) : LINE_WIDTH * Number(number[1]);
     }
-    return THICKNESS[word('thickness')]!;
+    return assertFound(THICKNESS[word('thickness')], 'every thickness word has a width');
   })();
+  assert(thickness > 0, 'a line, once read, has a thickness');
 
   const turn = ((): number | undefined => {
     const value = appearance['line.turn'];
@@ -2095,6 +2139,7 @@ function markupColors(
       colors[name] = color;
     }
   }
+  assert(Object.keys(colors).every((name) => styles.has(name)), 'markup lends only a declared style\'s color');
   return colors;
 }
 
