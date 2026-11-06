@@ -108,6 +108,7 @@ export function clausesOf(source: string): { statements: Gathered[]; starts: Set
   const statements: Gathered[] = [];
   const starts = new Set<Token>();
   parse(source, (statement) => statements.push(statement), starts);
+  assert(statements.every((statement) => statement.lines.length > 0), 'every statement gathered has a line');
   return { statements, starts };
 }
 
@@ -141,7 +142,12 @@ export function parse(source: string, seen?: (statement: Gathered) => void, star
         'a statement is gathered from its first line on, each line once and in order',
       );
       seen?.({ line: open.line, lines: open.lines });
-      statements.push(parseStatement(open.tokens, open.line, starts));
+      const stmt = parseStatement(open.tokens, open.line, starts);
+      assert(
+        stmt.line === open.line && (stmt.kind === open.tokens[0]?.text || open.tokens[0]?.text === 'guide'),
+        'a statement is what its keyword says, reported by the line it starts on',
+      );
+      statements.push(stmt);
     }
     open = null;
     depth = 0;
@@ -240,6 +246,7 @@ export function blame(source: string, error: SourceError, run: (source: string) 
   let end = start;
   while (end + 1 < lines.length && lines[end + 1]!.trim() !== '' && /^[ \t]/.test(lines[end + 1]!)) end += 1;
   if (end === start) return error;
+  assert(start < end && end < lines.length, 'a statement blamed runs over more than one line of the source');
 
   for (let last = start; last < end; last++) {
     const cut = lines.map((line, index) => (index > last && index <= end ? '' : line)).join('\n');
@@ -433,6 +440,10 @@ const BRACKET_ABOUT: Record<string, { kind: string; example: string }> = {
   border: { kind: 'a border', example: 'thickness: thick' },
   checks: { kind: 'a `checks:` bracket', example: 'edge-crossings: on' },
 };
+assert(
+  Object.keys(BRACKET_KEYS).every((key) => BRACKET_ABOUT[key] !== undefined),
+  'every bracketed key says how its errors quote it',
+);
 
 /**
  * Which of the line's properties a word belongs to, so that `line: square` —
@@ -584,6 +595,7 @@ function readAttr(
       if (!more) break;
     }
     setOnce(attrs, 'depth', clauses.join('; '), subject, line, { key, value: (v) => v.split('; ').join(', ') });
+    assert(clauses.length > 0 && next > at + 2, 'depth: takes a way and a name, at least');
     return next;
   }
   if (key === 'via') {
@@ -662,6 +674,7 @@ function readAttr(
             throw new SourceError(`${subject}: "${written}" names nothing — write \`${written} <thing>\``, line);
           }
           const read = readOneTarget(tokens, i, subject, line);
+          assert(read.next > i, 'a target an end is even with takes at least its name');
           targets.push(read.target);
           i = read.next;
           if (follows(tokens, i, 'and')) {
@@ -695,6 +708,7 @@ function readAttr(
     }
     setOnce(attrs, key, words.join(' '), subject, line);
     if (even) attrs[`${key}.even`] = JSON.stringify(even);
+    assert(next >= at + 2 && words.length > 0, `${key}: takes its key and the side or point it names`);
     return next;
   }
   if ((EDGE_ORDER_KEYS as readonly string[]).includes(key)) {
@@ -722,6 +736,7 @@ function readAttr(
       if (!listed) break;
     }
     setOnce(attrs, key, names.join(', '), subject, line);
+    assert(names.length > 0 && next >= at + 2, `${key}: takes its key and a name or more`);
     return next;
   }
   if (key === 'join-with') {
@@ -917,6 +932,7 @@ function readAttr(
       key,
       value: (v) => v.split('\n').map(quoteOf).join(' '),
     });
+    assert(next === at + 1 + texts.length, 'cards: takes its key and one string for each card');
     return next;
   }
   if (bracketKeys !== undefined && key !== 'text' && key !== 'line' && key !== 'border') {
@@ -1048,7 +1064,9 @@ function attrsOnly(tokens: Token[], start: number, line: number, subject: string
         line,
       );
     }
-    i = readAttr(tokens, i, attrs, line, subject, starts);
+    const next = readAttr(tokens, i, attrs, line, subject, starts);
+    assert(next > i, 'an attribute takes its key and more, so the list is read to its end');
+    i = next;
   }
   return attrs;
 }
@@ -1176,6 +1194,7 @@ function readEdgeTextBracket(
         if (AXIS_ADVERBS.has(after)) throw new SourceError(`${about}: ${axisAdverb(after, listTargets((read.placement as AlignPlacement).targets))}`, line);
         throw new SourceError(`${about}: "${written}" is followed by "${after}" — put a comma between them`, line);
       }
+      assert(read.next === item.length, 'an alignment in a text\'s bracket takes its whole item, up to its comma');
       once(placement.axis === 'x' ? 'where it sits across' : 'how high it sits', written);
       (place.even ??= []).push({ placement, written });
       i += item.length;
@@ -1240,6 +1259,7 @@ function readEdgeTextBracket(
       } else {
         place.by = { side: relation, target: read.target, written };
       }
+      assert(read.next > i, 'the box a text is placed by takes at least its name');
       i = read.next;
     }
     if (follows(tokens, i, '(')) {
@@ -1296,6 +1316,7 @@ function readEdgeTextBracket(
   if (place.edgeGap !== undefined && !place.beside) {
     throw new SourceError(`${about}: edge-gap: is the distance off the line for a text beside it, and it says no side — add \`right of edge\` or another`, line);
   }
+  assert(i > start, 'a text\'s bracket takes its brackets');
   return { attrs, place, next: i + 1 };
 }
 
@@ -1386,6 +1407,7 @@ function takeTitlePlacements(tokens: Token[], open: number, subject: string, lin
     if (head && !isAttrKey(head) && startsPlacement(head, each[1])) {
       for (let at = 0; at < each.length; ) {
         const read = readPlacement(each, at, line, subject, starts);
+        assert(read.next > at, 'a placement in a title\'s bracket takes at least its first word');
         placements.push(read.placement);
         at = read.next;
       }
@@ -1399,7 +1421,9 @@ function takeTitlePlacements(tokens: Token[], open: number, subject: string, lin
       ? [...each.slice(0, -1), { ...each[each.length - 1]!, text: `${each[each.length - 1]!.text},` }]
       : each,
   );
-  return { tokens: [...tokens.slice(0, open + 1), ...rejoined, ...tokens.slice(close)], placements };
+  const left = [...tokens.slice(0, open + 1), ...rejoined, ...tokens.slice(close)];
+  assert(left.length < tokens.length, 'the placements taken out of a title\'s bracket leave it shorter');
+  return { tokens: left, placements };
 }
 
 /**
@@ -1449,6 +1473,7 @@ function parseNode(head: Token[], line: number, starts: ClauseStarts): NodeStmt 
     line,
     listed: NODE_TEXT_LISTED,
   });
+  assert(bracket.next >= open, 'a node\'s tail starts after its name, text and text\'s bracket');
   refuseNodeReads(bracket.values['reads'], subject, line);
   const limits: Limit[] = [];
   const tail = parseTail(head, bracket.next, line, subject, starts, (tokens, index) => {
@@ -1606,6 +1631,7 @@ function readMarkText(
       line,
     );
   }
+  assert(bracket.next >= 3, 'a mark\'s text takes its string, and the rest starts after it');
   return {
     text: { text: written.text, textAttrs: place === undefined ? values : { ...values, place } },
     tokens,
@@ -1658,6 +1684,7 @@ function readArrow(head: Token[], line: number): { text: string; marks: EdgeMark
   }
   const from = readMark(parts[1]!, 'from', text, line);
   const to = readMark(parts[3]!, 'to', text, line);
+  assert(at > 2 && text.includes('-'), 'an arrow takes its shaft, with any marks it touches');
   return {
     text,
     marks: { ...(from !== undefined ? { from } : {}), ...(to !== undefined ? { to } : {}) },
@@ -1677,7 +1704,7 @@ function readMark(written: string, end: 'from' | 'to', arrow: string, line: numb
   const turned = MARK_GLYPHS[other][inner];
   if (turned !== undefined) {
     // A pointing glyph written at the end it points away from: `>--` or `--<`.
-    const right = Object.entries(MARK_GLYPHS[end]).find(([, mark]) => mark === turned)![0];
+    const right = assertFound(Object.entries(MARK_GLYPHS[end]).find(([, mark]) => mark === turned), 'each end has a glyph for every mark the other end has')[0];
     throw new SourceError(
       `"${arrow}": "${inner}" points the other way — at the ${end === 'from' ? 'left' : 'right'} end ` +
         `the ${turned} is "${right}", or write the word "${turned}"`,
@@ -1721,7 +1748,7 @@ function parseEdge(head: Token[], line: number, starts: ClauseStarts): EdgeStmt 
     if (stmt.name !== undefined) {
       throw new SourceError(`${subject}: a name belongs to one line, and "each child of" draws one line per child — leave the name off`, line);
     }
-    return { ...stmt, each: sides[0]! };
+    return { ...stmt, each: assertFound(sides[0], '"each child of", once found, is on one side') };
   }
   // `edge a -> b, c, d`: one line to each name in the list, drawn as one group,
   // so the stretch they share leaving `a` is said rather than happened on (6.6).
@@ -1826,6 +1853,7 @@ function eachChildAt(head: Token[]): number[] {
       index += 2;
     }
   }
+  assert(found.every((at, index) => index === 0 || at >= found[index - 1]! + 3), 'each "each child of" found is three words of its own');
   return found;
 }
 
@@ -1872,6 +1900,7 @@ function parseEdgeEnds(head: Token[], line: number, starts: ClauseStarts): EdgeS
     const text = head[at]!.text;
     const bracketed = follows(head, at + 1, '(');
     const read = readEdgeTextBracket(head, at + 1, subject, text, line, starts);
+    assert(read.next > at, 'a text on a line takes at least its string');
     texts.push({ text, textAttrs: read.attrs, place: read.place });
     at = read.next;
     if (bracketed && follows(head, at, '(')) {
@@ -2007,6 +2036,7 @@ function parseBundle(head: Token[], line: number, starts: ClauseStarts): BundleS
     if (key === 'via') {
       if (via !== undefined) throw new SourceError(`${subject}: "via" is written twice — keep one`, line);
       const read = readVia(head, i + 1, subject, line);
+      assert(read.next > i + 1, 'a bundle\'s via: takes its key and a stop or more');
       via = read.entries;
       i = read.next;
       continue;
@@ -2030,10 +2060,13 @@ function parseBundle(head: Token[], line: number, starts: ClauseStarts): BundleS
         }
         if (!listed) break;
       }
+      assert(next > i + 1, 'a bundle\'s order: takes its key and a name or more');
       i = next;
       continue;
     }
-    i = readAttr(head, i, attrs, line, subject, starts);
+    const next = readAttr(head, i, attrs, line, subject, starts);
+    assert(next > i, 'an attribute takes its key and more, so the bundle is read to its end');
+    i = next;
   }
   refuseKeys(attrs, BUNDLE_KEYS, subject, 'a bundle', line);
   if (via === undefined && between === undefined) {
@@ -2106,6 +2139,7 @@ function parsePoint(head: Token[], line: number, starts: ClauseStarts): PointStm
   }
   starts?.add(head[start]);
   const read = readOneTarget(head, start, subject, line, true);
+  assert(read.next > start, 'where a point is takes at least one word');
   if (read.listed) throw new SourceError(`${subject} is one point, so it takes no list`, line);
   refuseSpan(read.target, subject, line);
   const attrs = attrsOnly(head, read.next, line, subject, starts);
@@ -2128,12 +2162,14 @@ function parseRegion(head: Token[], line: number, starts: ClauseStarts): RegionS
   }
   starts?.add(head[start]);
   const first = readOneTarget(head, start, subject, line, true);
+  assert(first.next > start, 'a region\'s first corner takes at least one word');
   if (first.listed) throw new SourceError(`${subject}: a region runs from one point to another, written with "to", not a list`, line);
   let corners: RegionStmt['corners'];
   let next = first.next;
   if (follows(head, next, 'to')) {
     if (!head[next + 1] || isAttrKey(head[next + 1]!)) throw new SourceError(`${subject}: "to" names no point`, line);
     const second = readOneTarget(head, next + 1, subject, line, true);
+    assert(second.next > next + 1, 'a region\'s second corner takes at least one word');
     for (const corner of [first.target, second.target]) refuseSpan(corner, subject, line);
     corners = [first.target, second.target];
     next = second.next;
@@ -2230,7 +2266,7 @@ function parseDiagram(head: Token[], line: number, starts: ClauseStarts): Diagra
       continue;
     }
     if (key.startsWith('checks.')) {
-      setCheck({ ...CHECK_DEFAULTS }, key.slice('checks.'.length), attrs[key]!, (message) => new SourceError(message, line));
+      setCheck({ ...CHECK_DEFAULTS }, key.slice('checks.'.length), assertFound(attrs[key], 'a key read off the attributes has its value'), (message) => new SourceError(message, line));
       continue;
     }
     if (!(DIAGRAM_KEYS as readonly string[]).includes(key)) {
