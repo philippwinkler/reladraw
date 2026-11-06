@@ -11,14 +11,16 @@ import {
   widestLine,
 } from './constants.js';
 import type { Attrs, Mark, NodeCorners } from './ast.js';
+import { assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 import { ICON_STROKE, type Icon, type IconTone, type Outline } from './icons.js';
 import { insideOutline,isBoxy, isRound, placePath, shapeOf, SUBPROCESS_INSET, type ShapeLook } from './outline.js';
 import { monospaceMeasurer, type Measurer } from './measure.js';
 import { joinedToText, outlineStated, type DepthStatement, type Layout, type LayoutEdge, type LayoutMark, type LayoutNode, type LineLook } from './model.js';
 import { DARK_THEME, THEMES, overlapFill, regionTint, textOnFill, themeColor, type Theme } from './themes.js';
-import { crossingPoints, planLines, traceRoute, visibleRuns, type Point, type Route } from './lines.js';
-import { patchPadding, placeLineTexts } from './linetexts.js';
+import { crossingPoints, traceRoute, visibleRuns, type Point, type Route } from './lines.js';
+import { patchPadding, type PlacedText } from './linetexts.js';
+import type { Picture } from './picture.js';
 import { plain, type Line, type Run } from './text.js';
 
 export interface RenderOptions {
@@ -41,8 +43,8 @@ interface Extent {
 }
 
 /** Turn solved geometry into a standalone SVG document. */
-export function render(layout: Layout, options: RenderOptions = {}): string {
-  return drawing(layout, options)(false);
+export function render(picture: Picture, options: RenderOptions = {}): string {
+  return drawing(picture, options)(false);
 }
 
 /**
@@ -50,12 +52,13 @@ export function render(layout: Layout, options: RenderOptions = {}): string {
  * a group naming it and its statement's line, for a page that points at things
  * (`--page`). Drawn once, so the two can't disagree.
  */
-export function renderTagged(layout: Layout, options: RenderOptions = {}): { svg: string; tagged: string } {
-  const assemble = drawing(layout, options);
+export function renderTagged(picture: Picture, options: RenderOptions = {}): { svg: string; tagged: string } {
+  const assemble = drawing(picture, options);
   return { svg: assemble(false), tagged: assemble(true) };
 }
 
-function drawing(layout: Layout, options: RenderOptions): (tagged: boolean) => string {
+function drawing(picture: Picture, options: RenderOptions): (tagged: boolean) => string {
+  const layout = picture.layout;
   const measurer = options.measurer ?? monospaceMeasurer();
   const fontSize = options.fontSize ?? DEFAULT_FONT_SIZE;
   const theme = themeOf(layout, options);
@@ -90,13 +93,16 @@ function drawing(layout: Layout, options: RenderOptions): (tagged: boolean) => s
   // Everything the boxes cover. Edges are added to it as they are drawn.
   let ink: Extent = { minX: 0, minY: 0, maxX: layout.width, maxY: layout.height };
   // Every line is worked out from its own statement (design.org 6); the one
-  // thing lines share is a side, where several ends spread.
-  const routes = planLines(layout);
+  // thing lines share is a side, where several ends spread. All of them are
+  // planned here, hidden guides too, once the boxes are drawn: a line's
+  // mistake is reported after a box's and before a text's, as it always was.
+  picture.routes();
   const drawn = edges
-    .map((edge, index) => ({ edge, route: routes.get(layout.edges[index]!)! }))
+    .map((edge, index) => ({ edge, line: assertFound(layout.edges[index], 'a drawn line is one of the layout\'s') }))
     // A hidden guide line takes its place among the ends on a side, but draws nothing.
     .filter(({ edge }) => !hidden(edge))
-    .map(({ edge, route }) => drawEdge(edge, route, theme, measurer, fontSize, layout.markup));
+    // A shown guide is drawn in its own look; its texts sit where the line's own would.
+    .map(({ edge, line }) => drawEdge(edge, picture.route(line), picture.texts(line), theme, measurer, fontSize, layout.markup));
   // The drawing order comes first, since where two lines cross the one drawn
   // later is on top, and `depth:` may have moved either (design.org 6.6, 8.4).
   const keyOf = (edge: DrawnEdge): string => `edge ${edges.indexOf(edge.edge)}`;
@@ -109,7 +115,8 @@ function drawing(layout: Layout, options: RenderOptions): (tagged: boolean) => s
       clause.legs.map(({ leg, line }) => {
         const subject = drawn.find((edge) => keyOf(edge) === depth.subject);
         const owner = drawn.find((edge) => keyOf(edge) === line);
-        const trace = routes.get(layout.edges[Number(line.slice('edge '.length))]!)!.legs.get(leg)!;
+        const legLine = assertFound(layout.edges[Number(line.slice('edge '.length))], 'a leg\'s line key names a line');
+        const trace = picture.route(legLine).legs.get(leg)!;
         return subject && owner ? { top: clause.way === 'in front of' ? subject : owner, pair: [subject, owner], trace } : undefined;
       }),
     ),
@@ -993,6 +1000,7 @@ interface Patch {
 function drawEdge(
   edge: LayoutEdge,
   route: Route,
+  texts: PlacedText[],
   theme: Theme,
   measurer: Measurer,
   fontSize: number,
@@ -1049,7 +1057,7 @@ function drawEdge(
   // arrow needs no vocabulary of its own.
   const rest: string[] = [];
   const patches: Patch[] = [];
-  for (const placed of placeLineTexts(edge, route)) {
+  for (const placed of texts) {
     const { text, center, angle } = placed;
     const lineHeight = measurer.lineHeight(text.size);
     const { width, height } = text;

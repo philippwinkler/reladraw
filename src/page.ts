@@ -1,9 +1,6 @@
-import { fileChecks, findings, type Finding } from './checks.js';
-import { SourceError } from './errors.js';
-import type { DrawOptions } from './index.js';
-import { blame, parse } from './parser.js';
+import type { Finding } from './checks.js';
+import { drawSource, type DrawOptions } from './pipeline.js';
 import { renderTagged, themeOf } from './render.js';
-import { resolve } from './resolve.js';
 import { luminance, type Theme } from './themes.js';
 import { PAN_ZOOM } from './viewer.js';
 
@@ -26,22 +23,14 @@ export function drawPage(
 ): { html: string; findings: Finding[] } {
   const name = file.replace(/\.[^.]+$/, '') || file;
   const drawn = `drawn from ${file}, ${stamp(at)}`;
-  const run = (text: string) => {
-    const layout = resolve(parse(text), options);
-    const { svg, tagged } = renderTagged(layout, options);
-    const found =
-      options.checks === false ? [] : findings(layout, options.checks ? options.checks(fileChecks(layout)) : fileChecks(layout));
-    const title = layout.diagram['title'] ?? name;
-    return {
-      html: page({ title, name, drawn, source, svg, tagged, findings: found, theme: themeOf(layout, options) }),
-      findings: found,
-    };
+  const made = drawSource(source, options, (picture) => renderTagged(picture, options));
+  const { svg, tagged } = made.drawn;
+  const layout = made.picture.layout;
+  const title = layout.diagram['title'] ?? name;
+  return {
+    html: page({ title, name, drawn, source, svg, tagged, findings: made.findings, theme: themeOf(layout, options) }),
+    findings: made.findings,
   };
-  try {
-    return run(source);
-  } catch (error) {
-    throw error instanceof SourceError ? blame(source, error, run) : error;
-  }
 }
 
 interface PageParts {

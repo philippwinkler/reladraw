@@ -9,9 +9,10 @@
  */
 import { isWithin, joinedToText, type Layout, type LayoutEdge, type LayoutNode } from './model.js';
 import { ARROW_MARKER_WIDTH, LINE_WIDTH, UNIT, arrowLength } from './constants.js';
-import { centerOf, crossingPoints, describeEdge, faceOfNode, planSides, traceRoute, traceVisible, type Face, type Point, type Route, type SideEnds } from './lines.js';
+import { centerOf, crossingPoints, describeEdge, faceOfNode, traceRoute, traceVisible, type Face, type Point, type SideEnds } from './lines.js';
 import { clearOf, insideOutline,sizeFor } from './outline.js';
-import { placeLineTexts, type PlacedText } from './linetexts.js';
+import type { PlacedText } from './linetexts.js';
+import type { Picture } from './picture.js';
 
 /**
  * The kinds of finding, each with whether it is on when nothing says. Named in
@@ -104,20 +105,20 @@ export function setCheck(checks: Checks, kind: string, value: string, fail: (mes
   checks[kind] = value === 'on';
 }
 
-/** Every finding the layout has, for the kinds that are on, in line order. */
-export function findings(layout: Layout, checks: Checks): Finding[] {
+/** Every finding the picture has, for the kinds that are on, in line order. */
+export function findings(picture: Picture, checks: Checks): Finding[] {
+  const layout = picture.layout;
   const found: Finding[] = [];
   if (checks['node-overlap']) found.push(...nodeOverlaps(layout));
   if (checks['node-overflow']) found.push(...nodeOverflows(layout));
   if (checks['text-overflow']) found.push(...textOverflows(layout));
   if (checks['edge-node-overlap'] || checks['edge-overlap'] || checks['edge-no-length'] || checks['crowded-edge-ends'] || checks['edge-crossings'] || checks['text-overlap']) {
-    const plan = planSides(layout);
-    if (checks['edge-node-overlap']) found.push(...edgeNodeOverlaps(layout, plan.routes));
-    if (checks['edge-overlap']) found.push(...edgeOverlaps(layout, plan.routes));
-    if (checks['edge-no-length']) found.push(...edgesWithNoLength(layout, plan.routes));
-    if (checks['crowded-edge-ends']) found.push(...crowdedEnds(plan.sides));
-    if (checks['edge-crossings']) found.push(...edgeCrossings(layout, plan.routes));
-    if (checks['text-overlap']) found.push(...textOverlaps(layout, plan.routes));
+    if (checks['edge-node-overlap']) found.push(...edgeNodeOverlaps(picture));
+    if (checks['edge-overlap']) found.push(...edgeOverlaps(picture));
+    if (checks['edge-no-length']) found.push(...edgesWithNoLength(picture));
+    if (checks['crowded-edge-ends']) found.push(...crowdedEnds(picture.sides()));
+    if (checks['edge-crossings']) found.push(...edgeCrossings(picture));
+    if (checks['text-overlap']) found.push(...textOverlaps(picture));
   }
   return found.sort((a, b) => a.line - b.line);
 }
@@ -132,12 +133,13 @@ export function findings(layout: Layout, checks: Checks): Finding[] {
  * Nodes are filed in a grid first, so each line looks only at the boxes near
  * it rather than at every box.
  */
-function edgeNodeOverlaps(layout: Layout, routes: Map<LayoutEdge, Route>): Finding[] {
+function edgeNodeOverlaps(picture: Picture): Finding[] {
+  const layout = picture.layout;
   const found: Finding[] = [];
   const grid = new Grid(layout.nodes.filter((node) => !node.guide));
   for (const edge of layout.edges) {
     if (edge.guide) continue;
-    const trace = traceRoute(routes.get(edge)!);
+    const trace = traceRoute(picture.route(edge));
     for (const node of grid.near(trace)) {
       if (holdsEnd(node, edge)) continue;
       const inner = { x: node.x + 1, y: node.y + 1, width: node.width - 2, height: node.height - 2 };
@@ -360,11 +362,12 @@ class Grid {
  * A line between two boxes that touch has no length: it is drawn as its marks
  * at the seam, and reported (design.org 6.3).
  */
-function edgesWithNoLength(layout: Layout, routes: Map<LayoutEdge, Route>): Finding[] {
+function edgesWithNoLength(picture: Picture): Finding[] {
+  const layout = picture.layout;
   const found: Finding[] = [];
   for (const edge of layout.edges) {
     if (edge.guide) continue;
-    const points = routes.get(edge)!.points;
+    const points = picture.route(edge).points;
     let length = 0;
     for (let index = 1; index < points.length; index += 1) {
       length += Math.hypot(points[index]!.x - points[index - 1]!.x, points[index]!.y - points[index - 1]!.y);
@@ -447,9 +450,10 @@ function markWidth(edge: LayoutEdge, which: 'from' | 'to'): number {
  * a crossing drawn is a crossing reported; reported once per pair, against the
  * later line, with how many times they cross.
  */
-function edgeCrossings(layout: Layout, routes: Map<LayoutEdge, Route>): Finding[] {
+function edgeCrossings(picture: Picture): Finding[] {
+  const layout = picture.layout;
   const found: Finding[] = [];
-  const drawn = layout.edges.filter((edge) => !edge.guide).map((edge) => ({ edge, trace: traceRoute(routes.get(edge)!) }));
+  const drawn = layout.edges.filter((edge) => !edge.guide).map((edge) => ({ edge, trace: traceRoute(picture.route(edge)) }));
   drawn.forEach((later, index) => {
     for (const earlier of drawn.slice(0, index)) {
       const thickness = Math.max(later.edge.look.thickness, earlier.edge.look.thickness);
@@ -474,12 +478,13 @@ function edgeCrossings(layout: Layout, routes: Map<LayoutEdge, Route>): Finding[
  * Segments are swept by left edge, as boxes are for node-overlap, so each is
  * compared only with those beside it.
  */
-function edgeOverlaps(layout: Layout, routes: Map<LayoutEdge, Route>): Finding[] {
+function edgeOverlaps(picture: Picture): Finding[] {
+  const layout = picture.layout;
   type Segment = { edge: LayoutEdge; a: Point; b: Point; minX: number; maxX: number };
   const segments: Segment[] = [];
   for (const edge of layout.edges) {
     if (edge.guide) continue;
-    for (const trace of traceVisible(routes.get(edge)!)) {
+    for (const trace of traceVisible(picture.route(edge))) {
       for (let index = 1; index < trace.length; index += 1) {
         const a = trace[index - 1]!;
         const b = trace[index]!;
@@ -635,15 +640,16 @@ function textOverflows(layout: Layout): Finding[] {
  *
  * Found with a sweep across the page, as node overlaps are.
  */
-function textOverlaps(layout: Layout, routes: Map<LayoutEdge, Route>): Finding[] {
+function textOverlaps(picture: Picture): Finding[] {
+  const layout = picture.layout;
   // `words` is any text's content: a line's, or a point's or region's (design.org 7.4).
   type Item = { box: Box; text?: PlacedText; words?: string; node?: LayoutNode; title?: LayoutNode; line: number };
   const items: Item[] = [];
   const found: Finding[] = [];
   for (const edge of layout.edges) {
     if (edge.guide) continue;
-    const route = routes.get(edge)!;
-    for (const placed of placeLineTexts(edge, route)) {
+    const route = picture.route(edge);
+    for (const placed of picture.texts(edge)) {
       const box = boxOf(placed.box);
       items.push({ box, text: placed, words: placed.text.text, line: edge.line });
       if (placed.beside && acrossLine(traceRoute(route), placed.box)) {
@@ -664,7 +670,7 @@ function textOverlaps(layout: Layout, routes: Map<LayoutEdge, Route>): Finding[]
   }
   // Another line drawn through a text: the text knocks a hole only in its own
   // line, and a point's or a region's text has none.
-  const traces = layout.edges.filter((edge) => !edge.guide).map((edge) => ({ edge, trace: traceRoute(routes.get(edge)!) }));
+  const traces = layout.edges.filter((edge) => !edge.guide).map((edge) => ({ edge, trace: traceRoute(picture.route(edge)) }));
   for (const item of items) {
     const own = item.text?.text;
     const extent = { minX: item.box.x, minY: item.box.y, maxX: item.box.x + item.box.width, maxY: item.box.y + item.box.height };

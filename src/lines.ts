@@ -116,11 +116,6 @@ interface End {
  */
 const FAN_STEP = 16;
 
-/** Where every line in the layout goes. */
-export function planLines(layout: Layout): Map<LayoutEdge, Route> {
-  return planSides(layout).routes;
-}
-
 /** The ends sharing one side of one box, in their order along it. */
 export interface SideEnds {
   node: LayoutNode;
