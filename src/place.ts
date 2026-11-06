@@ -21,6 +21,7 @@
 import type { Axis, Direction, Limit, OffsetPlacement, Part, Placement, PlacementTarget, PointExpr, PointStmt, RegionStmt, Side } from './ast.js';
 import { describeLimit, describePlacement, describePoint, fractionAxis, nameTarget, PART_SIDES, partWordHint } from './ast.js';
 import { DECK_STEP, GAPS, HEADER_GAP, UNIT } from './constants.js';
+import { assert, assertFound } from './assert.js';
 import { SourceError } from './errors.js';
 import { isWithin, joinedToText, type LayoutNode } from './model.js';
 import { isBoxy, middleOf, shapeOf, towardOutline } from './outline.js';
@@ -58,6 +59,7 @@ export interface RegionTextFacts {
  * text along the side, from the end the text is aligned to. Outside, nothing.
  */
 export function regionGrown(extent: Extent, text: RegionTextFacts, axis: Axis): Extent {
+  assert(text.width >= 0 && text.height >= 0 && text.gap >= 0, 'a region\'s text is measured and its gap is a distance');
   const across = text.side === 'top' || text.side === 'bottom' ? 'x' : 'y';
   const size = (on: Axis) => (on === 'x' ? text.width : text.height);
   if (axis !== across) {
@@ -245,6 +247,16 @@ export class Placer {
     private readonly regionTexts: Map<string, RegionTextFacts> = new Map(),
   ) {}
 
+  /** What the tree pass settled about a node, which it did for every node it hands over. */
+  private factsOf(node: LayoutNode): NodeFacts {
+    return assertFound(this.facts.get(node), 'the tree pass settled the facts of every node it hands the placer');
+  }
+
+  /** A venn's three parts and how they sit, for a node known to be a venn. */
+  private vennOf(venn: LayoutNode): Venn {
+    return assertFound(this.factsOf(venn).venn, 'a node asked about as a venn has layout: venn');
+  }
+
   /**
    * Where each named point and region is on the page. A point names one spot,
    * so one that works out to a stretch (a side, a whole box) is refused.
@@ -283,6 +295,7 @@ export class Placer {
 
   /** Work out everything, and write it onto the nodes. */
   run(): void {
+    assert(this.roots.every((root) => root.parent === undefined && this.byName.get(root.name) === root), 'the roots are the top-level nodes, each known by its name');
     this.checkAnchors(this.roots, undefined);
     for (const node of this.byName.values()) this.checkLimitTargets(node);
     for (const node of this.byName.values()) {
@@ -300,6 +313,7 @@ export class Placer {
     for (const node of this.byName.values()) this.checkYielded(node);
     for (const node of this.byName.values()) this.checkLimitsMet(node);
     for (const node of this.byName.values()) this.finish(node);
+    assert(this.working.size === 0 && this.trail.length === 0 && this.trials.size === 0 && this.onPage.size === 0, 'nothing is left half worked out once everything is placed');
   }
 
   /**
@@ -355,7 +369,7 @@ export class Placer {
   /** A limit the box couldn't make room for: no side helps, or a stated size holds it in. */
   private checkLimitsMet(node: LayoutNode): void {
     for (const limit of node.limits ?? []) {
-      const parent = node.parent!;
+      const parent = assertFound(node.parent, 'a limit, once its targets are checked, is in a box');
       const axis = limitAxis(limit);
       const frame = this.frame(parent, axis);
       if (this.shortfall(parent, axis, { subject: node, limit }, frame) <= LIMIT_EPSILON) continue;
@@ -367,7 +381,7 @@ export class Placer {
           limit.line,
         );
       }
-      const named = this.byName.get(limit.target.name)!;
+      const named = assertFound(this.byName.get(limit.target.name), 'a limit\'s target, once checked, exists');
       const framed = [node, named].find((member) => member !== parent && this.framedOn(member, axis));
       const where = framed
         ? this.statements(framed, axis).map((statement) => `"${framed.name} ${describePlacement(statement.placement)}"`).join(' and ')
@@ -421,7 +435,7 @@ export class Placer {
     // A venn set's stagger places only its box when what it holds is placed across (`vennAlign`).
     const part = this.vennPart(node);
     if (part === 0 || part === 2) {
-      const parts = this.facts.get(node.parent!)!.venn!.parts;
+      const parts = this.vennOf(node.parent!).parts;
       if (staggerOf(own[0]!.placement, parts[2 - part]!) !== undefined) return;
     }
     for (const child of this.contentOf(node)) {
@@ -447,7 +461,7 @@ export class Placer {
 
   /** Where the anchor of a container placed by what it holds goes on the page, which is its frame's origin. */
   private anchorOnPage(node: LayoutNode, axis: Axis): number {
-    const anchor = this.frameAnchor(node, axis)!;
+    const anchor = assertFound(this.frameAnchor(node, axis), 'a frame is placed on the page by its anchor only when it has one');
     if (anchor.placements.length === 0) return this.origin(anchor, axis) + this.frame(anchor, axis).boxStart;
     const key = `${node.name}\n${axis}`;
     this.onPage.add(key);
@@ -467,7 +481,7 @@ export class Placer {
     const parent = node.parent;
     if (node.children.length === 0) return false;
     if (node.placements.length > 0 && !this.axisAnchors.has(`${node.name}\n${axis}`)) return false;
-    if (parent && (parent.heading === node || joinedToText(node) || this.facts.get(parent)!.layout || this.vennPart(node) !== undefined)) {
+    if (parent && (parent.heading === node || joinedToText(node) || this.factsOf(parent).layout || this.vennPart(node) !== undefined)) {
       return false;
     }
     return true;
@@ -482,10 +496,10 @@ export class Placer {
   private frameAnchor(node: LayoutNode, axis: Axis): LayoutNode | undefined {
     if (node.children.length === 0 || node.placements.length > 0) return undefined;
     const parent = node.parent;
-    if (parent && (parent.heading === node || joinedToText(node) || this.facts.get(parent)!.layout || this.vennPart(node) !== undefined)) {
+    if (parent && (parent.heading === node || joinedToText(node) || this.factsOf(parent).layout || this.vennPart(node) !== undefined)) {
       return undefined;
     }
-    const facts = this.facts.get(node)!;
+    const facts = this.factsOf(node);
     if (facts.layout || facts.venn) return undefined;
     const content = this.contentOf(node);
     if (this.anchoredOnTitle(node) || node.titlePlacements?.length) return undefined;
@@ -668,6 +682,7 @@ export class Placer {
     size?: string,
   ): T {
     if (this.working.has(key)) throw this.circle(node);
+    assert(this.trail.length === this.working.size, 'each quantity being worked out has one step on the trail');
     this.working.add(key);
     this.trail.push({ node, axis, ...(placement ? { placement } : {}), ...(size ? { size } : {}) });
     try {
@@ -725,7 +740,7 @@ export class Placer {
     // Joined to the text: wherever the text goes, the same distance from it.
     if (parent && joinedToText(node)) return this.frame(parent, axis).textStart + this.unitStart(node, axis);
     if (this.vennPart(node) !== undefined) return this.vennStart(node, axis);
-    if (parent && this.facts.get(parent)!.layout) return this.inLayout(node, axis).start;
+    if (parent && this.factsOf(parent).layout) return this.inLayout(node, axis).start;
     // The anchor of a frame placed by what it holds sits at its origin.
     if (parent && this.frameAnchor(parent, axis) === node) return 0;
     if (this.frameAnchor(node, axis)) {
@@ -895,6 +910,7 @@ export class Placer {
   }
 
   private overStated(node: LayoutNode, axis: Axis, statements: Statement[]): SourceError {
+    assert(statements.length > 1, 'only a box stated more than once on an axis is over-stated');
     const said = [...new Set(statements.map((statement) => statement.placement))]
       .map((placement) => `"${describePlacement(placement)}"`)
       .join(' and ');
@@ -1009,7 +1025,7 @@ export class Placer {
    */
   private pins(node: LayoutNode, axis: Axis): { start: number; size: number } | undefined {
     const parent = node.parent;
-    if (parent && this.facts.get(parent)!.layout) return undefined;
+    if (parent && this.factsOf(parent).layout) return undefined;
     const statements = this.statements(node, axis);
     if (statements.length !== 2) return undefined;
     const [first, second] = statements as [Statement, Statement];
@@ -1042,12 +1058,12 @@ export class Placer {
     if (own && placement.targets.some((target) => target.part === 'text')) {
       // One unit, as beside any text of one's own. An empty text takes no
       // room, and that includes the gap beside it.
-      return parent.heading !== undefined || this.facts.get(parent)!.hasText ? UNIT : 0;
+      return parent.heading !== undefined || this.factsOf(parent).hasText ? UNIT : 0;
     }
     if (placement.written === 'inside') {
       if (!own) return GAPS['tight']!;
       // `inside hub top-right` clears the padding of the sides it names.
-      const facts = this.facts.get(parent)!;
+      const facts = this.factsOf(parent);
       const part = placement.targets.find((target) => target.name === parent.name)?.part ?? '';
       if (axis === 'x') return part.includes('left') ? facts.pad.left : part.includes('right') ? facts.pad.right : facts.padding;
       return part.includes('top') ? facts.pad.top : part.includes('bottom') ? facts.pad.bottom : facts.padding;
@@ -1059,6 +1075,7 @@ export class Placer {
 
   /** The extent on one axis of what a placement names: one target, or the region bounding several. */
   private region(node: LayoutNode, placement: Placement, axis: Axis): Extent {
+    assert(placement.targets.length > 0, 'a placement names at least one thing');
     let start = Infinity;
     let end = -Infinity;
     for (const target of placement.targets) {
@@ -1325,7 +1342,7 @@ export class Placer {
     } else if (named === parent && target.part === 'text' && this.titleStates(parent, axis)) {
       // The title is placed against the children on this axis, so it is
       // known from them without the box.
-      const titleStart = this.titlePlaced(parent, axis)!;
+      const titleStart = assertFound(this.titlePlaced(parent, axis), 'a title that states this axis is placed on it');
       const unit = this.hasUnit(parent) ? this.unit(parent, axis) : undefined;
       text = { start: unit ? titleStart - unit.start : titleStart, size: this.textSize(parent, axis) };
       whole = text;
@@ -1374,7 +1391,7 @@ export class Placer {
 
   /** A node's text on one axis, given where the node starts. */
   private textOf(node: LayoutNode, axis: Axis, start: number): Extent {
-    const facts = this.facts.get(node)!;
+    const facts = this.factsOf(node);
     if (node.children.length > 0) {
       const frame = this.frame(node, axis);
       return { start: start + frame.textStart - frame.boxStart, size: frame.textSize };
@@ -1391,7 +1408,7 @@ export class Placer {
   /** A child placed against its own container's box, which it does not grow. */
   framed(node: LayoutNode): boolean {
     const parent = node.parent;
-    if (!parent || this.facts.get(parent)!.layout || this.facts.get(parent)!.venn) return false;
+    if (!parent || this.factsOf(parent).layout || this.factsOf(parent).venn) return false;
     return node.placements.some((placement) => this.againstBox(placement, parent));
   }
 
@@ -1441,7 +1458,7 @@ export class Placer {
     const known = this.units.get(key);
     if (known) return known;
     const worked = this.guard(`unit\n${key}`, node, axis, undefined, () => {
-      const hasText = this.facts.get(node)!.hasText;
+      const hasText = this.factsOf(node).hasText;
       let low = hasText ? 0 : Infinity;
       let high = hasText ? this.textSize(node, axis) : -Infinity;
       for (const child of node.children) {
@@ -1464,7 +1481,7 @@ export class Placer {
 
   /** How big a container's own text is on one axis, without what is joined to it. */
   private textSize(node: LayoutNode, axis: Axis): number {
-    const facts = this.facts.get(node)!;
+    const facts = this.factsOf(node);
     return facts.hasText ? (axis === 'x' ? facts.textBox.width : facts.textBox.height) : 0;
   }
 
@@ -1494,7 +1511,7 @@ export class Placer {
 
   /** Whether a node has a title: its text, what is joined to it, or a heading. */
   private hasTitle(node: LayoutNode): boolean {
-    return node.heading !== undefined || this.facts.get(node)!.hasText || this.hasUnit(node);
+    return node.heading !== undefined || this.factsOf(node).hasText || this.hasUnit(node);
   }
 
   /** How big a container's title is on one axis: its heading, or its text with what is joined to it. */
@@ -1514,7 +1531,7 @@ export class Placer {
     if ((node.heading || this.hasUnit(node)) && !stated && this.contentOf(node).length === 0) {
       return { how: 'center', side: 'center', along: 'center' };
     }
-    return this.facts.get(node)!.title;
+    return this.factsOf(node).title;
   }
 
   // --- sizes ---------------------------------------------------------------
@@ -1549,7 +1566,7 @@ export class Placer {
 
   /** Whether a laid-out container sets its children's size on this axis. */
   private stretches(parent: LayoutNode, axis: Axis): boolean {
-    const layout = this.facts.get(parent)!.layout;
+    const layout = this.factsOf(parent).layout;
     return layout !== undefined && (layout.kind === 'deck' || (axis === 'x' && layout.widths !== 'natural'));
   }
 
@@ -1569,13 +1586,15 @@ export class Placer {
           node.line,
         );
       }
-      return Math.min(Math.max(value, low), high);
+      const sized = Math.min(Math.max(value, low), high);
+      assert(sized >= low && sized <= high, 'a size stated or held stays within its min- and max-');
+      return sized;
     });
   }
 
   /** What a node's own contents make it, before anything stretches it. */
   private naturalSize(node: LayoutNode, axis: Axis): number {
-    const facts = this.facts.get(node)!;
+    const facts = this.factsOf(node);
     if (node.children.length === 0) return axis === 'x' ? facts.natural.width : facts.natural.height;
     return this.outline(node, axis).natural;
   }
@@ -1590,7 +1609,7 @@ export class Placer {
 
   private evaluate(node: LayoutNode, key: string, size: SizeExpr): number {
     const dimension = SIZE_KEYS[key]!;
-    const facts = this.facts.get(node)!;
+    const facts = this.factsOf(node);
     switch (size.kind) {
       case 'number':
         if (size.unit === 'px') return size.value;
@@ -1681,7 +1700,7 @@ export class Placer {
     let container = named.parent;
     if (!container || container === frame) return false;
     for (; container && container !== frame; container = container.parent) {
-      if (this.frameAnchor(container, axis) || this.vennPart(container) !== undefined || this.facts.get(container)!.venn) return false;
+      if (this.frameAnchor(container, axis) || this.vennPart(container) !== undefined || this.factsOf(container).venn) return false;
     }
     return container === frame;
   }
@@ -1703,7 +1722,7 @@ export class Placer {
    * border or on it.
    */
   private workOutFrame(node: LayoutNode, axis: Axis, room: Room = NO_ROOM): FrameAxis {
-    const facts = this.facts.get(node)!;
+    const facts = this.factsOf(node);
     const title = this.titleOf(node);
     const hasTitle = this.hasTitle(node);
     const titleSize = this.titleSize(node, axis);
@@ -1886,19 +1905,21 @@ export class Placer {
     const grow =
       box !== undefined
         ? outline.boxStart + this.vennPlan(node.parent!, 'y')[part!] - box.start
-        : extra * share[this.facts.get(node)!.gather[axis]];
+        : extra * share[this.factsOf(node).gather[axis]];
     let shift = 0;
     if (!anchored && title.how !== 'center' && title.side !== 'center' && !this.titleStates(node, axis)) {
       const toward = axis === across ? title.along : title.side === 'top' || title.side === 'left' ? 'start' : 'end';
       shift = extra * share[toward] - grow;
     }
-    return {
+    const fitted = {
       ...outline,
       boxStart: outline.boxStart - grow,
       boxSize: outline.boxSize + extra,
       titleStart: outline.titleStart + shift,
       textStart: outline.textStart + shift,
     };
+    assert(Math.abs(fitted.boxSize - this.size(node, axis)) < 1e-6, 'a container fitted to its size has that size');
+    return fitted;
   }
 
   /** The title's placements that state one axis. */
@@ -2029,11 +2050,11 @@ export class Placer {
    * and never by itself.
    */
   private inLayout(node: LayoutNode, axis: Axis): { start: number; size?: number } {
-    const parent = node.parent!;
+    const parent = assertFound(node.parent, 'a laid-out child is in the container that lays it out');
     const key = `${node.name}\n${axis}`;
     const known = this.laid.get(key);
     if (known) return known;
-    const layout = this.facts.get(parent)!.layout!;
+    const layout = assertFound(this.factsOf(parent).layout, 'a child is laid out only by a container with layout:');
     const main: Axis = layout.kind === 'column' ? 'y' : 'x';
     const children = parent.children.filter((child) => child !== parent.heading && !joinedToText(child));
     const natural = (child: LayoutNode, on: Axis) => this.ownSize(child, on);
@@ -2043,7 +2064,7 @@ export class Placer {
       const size = Math.max(...children.map((child) => natural(child, axis)));
       const last = children.length - 1;
       children.forEach((child, index) => this.laid.set(`${child.name}\n${axis}`, { start: (last - index) * DECK_STEP, size }));
-      return this.laid.get(key)!;
+      return assertFound(this.laid.get(key), 'a layout places each child it arranges');
     }
     if (axis !== main && this.stretches(parent, axis)) {
       for (const child of children) {
@@ -2090,14 +2111,14 @@ export class Placer {
         this.laid.set(`${child.name}\n${axis}`, stretch ? { start, size } : { start });
       }
     }
-    return this.laid.get(key)!;
+    return assertFound(this.laid.get(key), 'a layout places each child it arranges');
   }
 
   // --- venn ----------------------------------------------------------------
 
   /** Which part of a venn a node is: 0 the left set, 1 the overlap, 2 the right set. */
   private vennPart(node: LayoutNode): 0 | 1 | 2 | undefined {
-    const venn = node.parent ? this.facts.get(node.parent)!.venn : undefined;
+    const venn = node.parent ? this.factsOf(node.parent).venn : undefined;
     if (!venn) return undefined;
     const index = venn.parts.indexOf(node);
     return index === -1 ? undefined : (index as 0 | 1 | 2);
@@ -2135,14 +2156,15 @@ export class Placer {
     const key = `venn\n${venn.name}\n${axis}`;
     const known = this.vennPlans.get(key);
     if (known) return known;
-    const [left, shared, right] = this.facts.get(venn)!.venn!.parts;
+    const [left, shared, right] = this.vennOf(venn).parts;
+    assert(new Set([left, shared, right]).size === 3 && [left, shared, right].every((part) => part.parent === venn), 'a venn\'s three parts are three of its own children');
     let plan: [number, number, number];
     if (axis === 'x') {
       const [l, o, r] = [left, shared, right].map((part) => this.partContent(part, axis)) as [Extent, Extent, Extent];
-      const between = this.facts.get(venn)!.venn!.gap;
+      const between = this.vennOf(venn).gap;
       const dl = -l.start;
-      const dO = dl + l.start + l.size + between + this.facts.get(right)!.pad.left - o.start;
-      const dr = dO + o.start + o.size + this.facts.get(left)!.pad.right + between - r.start;
+      const dO = dl + l.start + l.size + between + this.factsOf(right).pad.left - o.start;
+      const dr = dO + o.start + o.size + this.factsOf(left).pad.right + between - r.start;
       plan = [dl, dO, dr];
     } else {
       plan = [this.vennShift(left, axis), this.vennShift(shared, axis), this.vennShift(right, axis)];
@@ -2159,7 +2181,9 @@ export class Placer {
    * unplaced part shares.
    */
   private vennShift(part: LayoutNode, axis: Axis): number {
-    if (axis === 'x') return this.vennPlan(part.parent!, axis)[this.vennPart(part)!];
+    const which = this.vennPart(part);
+    assert(which !== undefined && part.parent !== undefined, 'only a venn\'s part is shifted within it');
+    if (axis === 'x') return this.vennPlan(part.parent, axis)[which];
     const key = `${part.name}\n${axis}`;
     const known = this.vennShifts.get(key);
     if (known !== undefined) return known;
@@ -2171,7 +2195,7 @@ export class Placer {
         return this.apply(anchor, axis, this.statements(anchor, axis)[0]!);
       }
       const venn = part.parent!;
-      const [left, shared, right] = this.facts.get(venn)!.venn!.parts;
+      const [left, shared, right] = this.vennOf(venn).parts;
       const own = this.partContent(part, axis);
       const align = this.vennAlign(venn);
       if (part === shared || align?.mover !== part || align.boxOnly) return -(own.start + own.size / 2);
@@ -2203,7 +2227,7 @@ export class Placer {
    * what it wraps.
    */
   private vennAlign(venn: LayoutNode): { mover: LayoutNode; side: 'start' | 'end'; by: number; boxOnly: boolean } | undefined {
-    const { parts, align } = this.facts.get(venn)!.venn!;
+    const { parts, align } = this.vennOf(venn);
     const [left, shared, right] = parts;
     for (const written of [right, left]) {
       const [placement] = written.placements;
@@ -2279,22 +2303,22 @@ export class Placer {
   private vennPhantom(node: LayoutNode, axis: Axis): Extent | undefined {
     const part = this.vennPart(node);
     if (part === undefined || part === 1) return undefined;
-    const venn = node.parent!;
+    const venn = assertFound(node.parent, 'a venn\'s set is inside its venn');
     const plan = this.vennPlan(venn, axis);
-    const shared = this.partContent(this.facts.get(venn)!.venn!.parts[1], axis);
+    const shared = this.partContent(this.vennOf(venn).parts[1], axis);
     return { start: shared.start + plan[1] - plan[part], size: shared.size };
   }
 
   /** Where a venn's part starts in the venn's frame. */
   private vennStart(node: LayoutNode, axis: Axis): number {
-    const part = this.vennPart(node)!;
+    const part = assertFound(this.vennPart(node), 'only a venn\'s part starts within it');
     if (part === 1) return this.strip(node.parent!, axis).start;
     return this.frame(node, axis).boxStart + this.vennPlan(node.parent!, axis)[part];
   }
 
   /** A venn's part's size: a set wraps what it holds, or takes the box `vennBox` gives it; the overlap is where they cross. */
   private vennSize(node: LayoutNode, axis: Axis): number {
-    const venn = node.parent!;
+    const venn = assertFound(node.parent, 'a venn\'s part is sized within its venn');
     if (this.vennPart(node) === 1) return this.strip(venn, axis).size;
     const box = axis === 'y' ? this.vennBox(node) : undefined;
     return box === undefined ? this.ownSize(node, axis) : box.size;
@@ -2311,7 +2335,7 @@ export class Placer {
    */
   private vennBox(set: LayoutNode): Extent | undefined {
     const venn = set.parent!;
-    const facts = this.facts.get(venn)!.venn!;
+    const facts = this.vennOf(venn);
     const plan = this.vennPlan(venn, 'y');
     const natural = (part: LayoutNode): { start: number; end: number } => {
       const outline = this.outline(part, 'y');
@@ -2348,7 +2372,7 @@ export class Placer {
 
   /** Where a venn's two sets cross, in the venn's frame. */
   private strip(venn: LayoutNode, axis: Axis): Extent {
-    const [left, , right] = this.facts.get(venn)!.venn!.parts;
+    const [left, , right] = this.vennOf(venn).parts;
     const leftStart = this.start(left, axis);
     const rightStart = this.start(right, axis);
     const leftEnd = leftStart + this.size(left, axis);
@@ -2365,7 +2389,7 @@ export class Placer {
    */
   private stripFrame(node: LayoutNode, axis: Axis): FrameAxis {
     const venn = node.parent!;
-    const [left, , right] = this.facts.get(venn)!.venn!.parts;
+    const [left, , right] = this.vennOf(venn).parts;
     const plan = this.vennPlan(venn, axis);
     const strip = this.strip(venn, axis);
     const boxStart = strip.start - plan[1];
@@ -2378,7 +2402,7 @@ export class Placer {
       const set = lower === 0 ? left : right;
       titleStart = this.hasTitle(set)
         ? this.frame(set, 'y').titleStart + plan[lower] - plan[1]
-        : boxStart + this.facts.get(node)!.padding;
+        : boxStart + this.factsOf(node).padding;
     }
     return { boxStart, boxSize: strip.size, natural: strip.size, titleStart, titleSize, textStart: titleStart, textSize: titleSize };
   }
@@ -2395,7 +2419,7 @@ export class Placer {
     // pass refused any placement on it. What is joined to the text goes with
     // the title, placed against the text.
     const members = all.filter((member) => member !== parent?.heading && !(parent && joinedToText(member)));
-    const venn = parent ? this.facts.get(parent)!.venn : undefined;
+    const venn = parent ? this.factsOf(parent).venn : undefined;
     if (parent && venn) {
       // The venn places its three parts. A set may line its top or bottom up
       // with the other set's instead of being centered on it, or with that
@@ -2430,7 +2454,7 @@ export class Placer {
           right.placements[0]!.line,
         );
       }
-    } else if (parent && this.facts.get(parent)!.layout) {
+    } else if (parent && this.factsOf(parent).layout) {
       for (const child of members) {
         const [placement] = child.placements;
         if (placement) {
@@ -2570,7 +2594,7 @@ export class Placer {
       );
     }
     // A stagger on the part then places only its box (`vennAlign`), so the two say different things.
-    const [left, , right] = this.facts.get(part.parent!)!.venn!.parts;
+    const [left, , right] = this.vennOf(part.parent!).parts;
     const otherSet = part === left ? right : left;
     if (part.placements.length > 0 && staggerOf(part.placements[0]!, otherSet) === undefined) {
       throw new SourceError(
@@ -2585,7 +2609,7 @@ export class Placer {
 
   /** The text box, how far the node reaches past its own box, and the flags the renderer reads. */
   private finish(node: LayoutNode): void {
-    const facts = this.facts.get(node)!;
+    const facts = this.factsOf(node);
     if (node.children.length === 0) {
       node.textBox = this.leafText(node);
       const x = this.reachOf(node, 'x');
@@ -2611,7 +2635,7 @@ export class Placer {
    * and a circle keep their text where their shape puts it.
    */
   private leafText(node: LayoutNode): { x: number; y: number; width: number; height: number } {
-    const facts = this.facts.get(node)!;
+    const facts = this.factsOf(node);
     const box = facts.textBox;
     const width = this.size(node, 'x');
     const height = this.size(node, 'y');
@@ -2657,7 +2681,7 @@ export class Placer {
     if (node.children.length === 0) {
       // Only a text placed on or outside the border reaches past it; one that
       // spills from a box too small for it is drawn spilling and reported.
-      const how = this.facts.get(node)!.title.how;
+      const how = this.factsOf(node).title.how;
       if (node.textAttrs['place'] === undefined || how === 'inside' || how === 'center') return { low: 0, high: 0 };
       const text = this.leafText(node);
       const start = axis === 'x' ? text.x : text.y;
@@ -2668,7 +2692,7 @@ export class Placer {
     const end = frame.boxStart + frame.boxSize;
     let low = 0;
     let high = 0;
-    if (this.facts.get(node)!.hasText) {
+    if (this.factsOf(node).hasText) {
       low = Math.max(low, frame.boxStart - frame.titleStart);
       high = Math.max(high, frame.titleStart + frame.titleSize - end);
     }
